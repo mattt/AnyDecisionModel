@@ -107,6 +107,49 @@ struct TokenScoringTests {
         "0": 20, "1": 21, "2": 22,
     ])
 
+    @Test(arguments: ["<|im_start|>assistant\n", "<|im_start|>assistant\n<think>\n"])
+    func appendsClosedThinkBlockWhenMissing(ending: String) {
+        let prompt = [1, 2, 3]
+        let block = [10, 11, 12, 11]
+        let result = TokenScoring.appendingClosedThinkBlock(to: prompt, closedThinkTokens: block) { tokens in
+            #expect(tokens == prompt)
+            return ending
+        }
+        #expect(result == prompt + block)
+    }
+
+    @Test(arguments: [[10, 11, 12, 11], [20, 21, 22, 23, 24, 25, 26, 27]])
+    func preservesClosedThinkBlockWithDifferentEncodings(ending: [Int]) {
+        let prompt = [1, 2, 3] + ending
+        let result = TokenScoring.appendingClosedThinkBlock(
+            to: prompt,
+            closedThinkTokens: [10, 11, 12, 11]
+        ) { tokens in
+            #expect(tokens == Array(prompt.suffix(8)))
+            return "<think>\n\n</think>\n\n"
+        }
+        #expect(result == prompt)
+    }
+
+    @Test func preservesPromptWithoutThinkMarkers() {
+        let prompt = [1, 2, 3]
+        let result = TokenScoring.appendingClosedThinkBlock(to: prompt, closedThinkTokens: []) { _ in
+            Issue.record("A tokenizer without thinking markers should not decode the prompt.")
+            return ""
+        }
+        #expect(result == prompt)
+    }
+
+    @Test func checksOnlyPromptTailForClosedThinkBlock() {
+        let prompt = Array(1 ... 20)
+        let block = [30, 31, 32, 31]
+        let result = TokenScoring.appendingClosedThinkBlock(to: prompt, closedThinkTokens: block) { tokens in
+            #expect(tokens == Array(13 ... 20))
+            return tokens.contains(1) ? "Earlier </think> in the user message" : "assistant\n"
+        }
+        #expect(result == prompt + block)
+    }
+
     @Test func singleTokenVariantsCoverCaseAndLeadingSpace() {
         let ids = TokenScoring.singleTokenVariants(of: "yes", encode: tokenizer.encode)
         #expect(ids == [1, 2, 3, 4, 5])

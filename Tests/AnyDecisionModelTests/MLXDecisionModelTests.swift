@@ -175,6 +175,25 @@ import Testing
             #expect(abs(distribution.values.reduce(0, +) - 1) < 1e-6)
         }
 
+        @Test(arguments: [false, true])
+        func closedThinkFallbackIsOptIn(prefixCaching: Bool) async throws {
+            // The default model retains thinking markers but its template omits the block.
+            let question = Question.binary(instructions: "Is the customer asking for a refund?")
+            let original = try await DecisionSession(
+                model: MLXDecisionModel(prefixCaching: prefixCaching),
+                state: .text(ticket)
+            ).decide([question])
+            let fallback = try await DecisionSession(
+                model: MLXDecisionModel(prefixCaching: prefixCaching, closedThinkFallback: true),
+                state: .text(ticket)
+            ).decide([question])
+
+            // This tokenizer encodes the closed block as four tokens.
+            #expect(fallback.usage.inputTokenCount == original.usage.inputTokenCount + 4)
+            #expect(fallback.diagnostics[0].cachedTokenCount == original.diagnostics[0].cachedTokenCount)
+            #expect(fallback.diagnostics[0].evaluatedTokenCount == original.diagnostics[0].evaluatedTokenCount + 4)
+        }
+
         @Test func cachedAndUncachedResultsMatch() async throws {
             let cached = try await DecisionSession(model: makeModel(prefixCaching: true), state: .text(ticket)).decide(
                 questions

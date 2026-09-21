@@ -59,6 +59,15 @@ import Foundation
         /// Turn this off to compare cached and uncached results.
         public var prefixCaching: Bool
 
+        /// Whether to append a closed thinking block when the prompt has none.
+        ///
+        /// Enable this for reasoning models whose chat templates ignore
+        /// `enable_thinking: false`.
+        /// The tokenizer must have both `<think>` and `</think>` markers.
+        /// This option is off by default because models without a thinking mode
+        /// can also have these markers.
+        public var closedThinkFallback: Bool
+
         /// The system prompt.
         public var systemPrompt: String
 
@@ -72,6 +81,9 @@ import Foundation
         ///   - calibration: A calibration for answer probabilities. Pass `nil` for raw probabilities.
         ///   - rotationDebiasing: Whether to average choice results over rotations of the option order.
         ///   - prefixCaching: Whether sessions reuse a cache for the shared prompt prefix.
+        ///   - closedThinkFallback: Whether to append a closed thinking block
+        ///     if the template omits it and the tokenizer has thinking markers.
+        ///     Defaults to `false`.
         ///   - systemPrompt: The system prompt.
         public init(
             modelID: String = MLXDecisionModel.defaultModelID,
@@ -80,6 +92,7 @@ import Foundation
             calibration: Calibration? = nil,
             rotationDebiasing: Bool = false,
             prefixCaching: Bool = true,
+            closedThinkFallback: Bool = false,
             systemPrompt: String = MLXDecisionModel.defaultSystemPrompt
         ) {
             self.modelID = modelID
@@ -88,6 +101,7 @@ import Foundation
             self.calibration = calibration
             self.rotationDebiasing = rotationDebiasing
             self.prefixCaching = prefixCaching
+            self.closedThinkFallback = closedThinkFallback
             self.systemPrompt = systemPrompt
         }
 
@@ -343,11 +357,26 @@ import Foundation
                 ["role": "user", "content": user],
             ]
             // Disable thinking so that the answer token follows the generation prompt.
-            return try tokenizer.applyChatTemplate(
+            let tokens = try tokenizer.applyChatTemplate(
                 messages: messages,
                 tools: nil,
                 additionalContext: ["enable_thinking": false]
             )
+            guard model.closedThinkFallback else { return tokens }
+            return TokenScoring.appendingClosedThinkBlock(
+                to: tokens,
+                closedThinkTokens: closedThinkTokens(tokenizer: tokenizer),
+                decode: { tokenizer.decode(tokenIds: $0, skipSpecialTokens: false) }
+            )
+        }
+
+        private func closedThinkTokens(tokenizer: any MLXLMCommon.Tokenizer) -> [Int] {
+            guard let opening = tokenizer.convertTokenToId("<think>"),
+                let closing = tokenizer.convertTokenToId("</think>")
+            else { return [] }
+
+            let blankLines = tokenizer.encode(text: "\n\n", addSpecialTokens: false)
+            return [opening] + blankLines + [closing] + blankLines
         }
 
         /// Fills the session's prefix cache for a state, if it is not already filled.

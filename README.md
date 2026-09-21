@@ -160,7 +160,16 @@ Binary questions use the labels "yes" and "no".
 Choice options are labeled A to Z, so a choice can have at most 26 options.
 Score levels are labeled 0 to 9, so a score can have at most 10 levels.
 The model checks every label's token mapping before it runs inference.
-Thinking is disabled in the chat template.
+The model passes `enable_thinking: false` to the chat template.
+
+> [!NOTE]
+> For reasoning models whose templates ignore this flag,
+> set `closedThinkFallback: true`.
+> This appends `<think>\n\n</think>\n\n` when the tokenizer has both markers
+> and the decoded prompt tail does not contain `</think>`.
+> The option is off by default.
+> Enable it only for models with a thinking mode;
+> the default Qwen3 Instruct model retains these markers but has no thinking mode.
 
 Sessions share loaded weights.
 Each session keeps a cache for the prompt prefix that contains the state,
