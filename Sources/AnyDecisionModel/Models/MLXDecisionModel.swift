@@ -92,8 +92,11 @@ import Foundation
         /// Batching applies to models whose layers use plain key-value caches, such as Qwen3;
         /// other models evaluate each prompt separately.
         /// Set it to 1 to evaluate each prompt separately.
+        /// Values less than 1 are clamped to 1.
         /// It defaults to ``defaultMaximumBatchSize``.
-        public var maximumBatchSize: Int
+        public var maximumBatchSize: Int {
+            didSet { maximumBatchSize = max(1, maximumBatchSize) }
+        }
 
         /// Creates an MLX decision model.
         ///
@@ -337,17 +340,19 @@ import Foundation
             // Prompt preparation needs only the CPU, so it runs outside the container's lock.
             // It can then run during the prefix prefill and during the GPU work of other sessions.
             async let prepared = tokenizationGate.withLock {
-                try await self.jobs(for: plans, about: state, tokenizer: tokenizer)
+                let start = ContinuousClock.now
+                let jobs = try await self.jobs(for: plans, about: state, tokenizer: tokenizer)
+                return (jobs, start.duration(to: .now))
             }
             if model.prefixCaching {
                 try await container.perform { context in
                     try self.preparePrefix(for: state, context: context)
                 }
             }
-            let jobs = try await prepared
+            let (jobs, preparationDuration) = try await prepared
 
             return try await container.perform { context in
-                try self.respond(to: plans, jobs: jobs, context: context)
+                try self.respond(to: plans, jobs: jobs, preparationDuration: preparationDuration, context: context)
             }
         }
 
@@ -410,12 +415,15 @@ import Foundation
         }
 
         /// Evaluates the prompts and combines the results into one answer for each question.
-        private func respond(to plans: [Plan], jobs: [Job], context: ModelContext) throws
-            -> DecisionSession.Response
-        {
+        private func respond(
+            to plans: [Plan],
+            jobs: [Job],
+            preparationDuration: Duration,
+            context: ModelContext
+        ) throws -> DecisionSession.Response {
             let start = ContinuousClock.now
             let results = try evaluate(jobs, tokenMaps: plans.map(\.tokenMap), context: context)
-            let elapsed = start.duration(to: .now)
+            let elapsed = preparationDuration + start.duration(to: .now)
 
             var answers: [Answer] = []
             var diagnostics: [DecisionSession.Diagnostics] = []

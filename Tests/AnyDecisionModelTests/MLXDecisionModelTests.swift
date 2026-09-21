@@ -33,6 +33,15 @@ import Testing
             #expect(MLXDecisionModel().maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize)
             #expect(MLXDecisionModel(maximumBatchSize: 0).maximumBatchSize == 1)
         }
+
+        @Test(arguments: [(Int.min, 1), (-1, 1), (0, 1), (1, 1), (4, 4), (Int.max, Int.max)])
+        func batchSizeIsClampedOnAssignment(value: Int, expected: Int) {
+            var model = MLXDecisionModel()
+            model.maximumBatchSize = value
+            #expect(model.maximumBatchSize == expected)
+            model.maximumBatchSize = 8
+            #expect(model.maximumBatchSize == 8)
+        }
     }
 
     private func makeModel(
