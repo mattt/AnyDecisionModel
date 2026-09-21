@@ -59,18 +59,47 @@ jobs:
       - name: Set up mise
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
 
-      - name: Install Metal toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Identify Xcode build
+        id: xcode
+        run: echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
 
-      - name: Cache Swift Package Manager dependencies
+      - name: Cache Metal toolchain download
+        id: metal-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/metal-toolchain
+          key: ${{ runner.os }}-${{ runner.arch }}-metal-${{ steps.xcode.outputs.build }}
+
+      - name: Download Metal toolchain
+        if: steps.metal-cache.outputs.cache-hit != 'true'
+        run: xcodebuild -downloadComponent MetalToolchain -exportPath "$HOME/.cache/metal-toolchain"
+
+      - name: Install Metal toolchain
+        run: |
+          xcrun --kill-cache
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            for bundle in "$HOME/.cache/metal-toolchain/"*.exportedBundle; do
+              xcodebuild -importComponent MetalToolchain -importPath "$bundle"
+            done
+            xcrun --kill-cache
+          fi
+          xcrun metal --version
+
+      - name: Cache MLX dependencies and build outputs
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/org.swift.swiftpm
             .build
-          key: ${{ runner.os }}-${{ runner.arch }}-xcode-27-mlx-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-mlx-spm-v2-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-xcode-27-mlx-spm-
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-mlx-spm-v2-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-mlx-spm-v2-
+
+      - name: Remove cached build descriptions
+        # Descriptions contain Metal compiler paths from the previous runner's
+        # temporary mount. Keep build.db and compiled outputs for incremental builds.
+        run: rm -rf .build/out/Intermediates.noindex/XCBuildData/*.xcbuilddata
 
       - name: Build with MLX
         run: mise run _swift:mlx -- build --build-tests --traits MLX
