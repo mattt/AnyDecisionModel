@@ -180,7 +180,25 @@ MLX 0.31.2 fixes this
 ([ml-explore/mlx#3271](https://github.com/ml-explore/mlx/pull/3271)).
 With `prefixCaching: true`, each session keeps a cache for the state prefix,
 and each question runs on a copy of that cache.
+For models whose layers use plain key-value caches, such as Qwen3,
+the model passes an explicit causal mask array instead of the affected symbolic mask.
 Check cached and uncached results for your model and workload before enabling it.
+
+When `decide(_:)` receives several questions,
+the model evaluates the prompt tokens that they share once.
+A group of prompts that shares more tokens,
+such as the option-order rotations of one choice,
+also shares the evaluation of those tokens.
+The model then evaluates the rest of each prompt in batches,
+with up to `maximumBatchSize` prompts in one forward pass.
+The default is 16; set it to 1 to evaluate each prompt separately.
+Batching applies to models whose layers use plain key-value caches;
+other models evaluate each prompt separately.
+Batching saves the most time when the questions share a long beginning
+and differ only near the end.
+For example, put the text that is the same for every question in the state
+or at the start of the instructions,
+and put the part that changes, such as an item name, last.
 
 Language models tend to prefer an option because of its position in the list,
 for example the option labeled A.

@@ -28,15 +28,25 @@ import Testing
         @Test func prefixCachingIsDisabledByDefault() {
             #expect(MLXDecisionModel().prefixCaching == false)
         }
+
+        @Test func batchSizeHasADefaultAndIsAtLeast1() {
+            #expect(MLXDecisionModel().maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize)
+            #expect(MLXDecisionModel(maximumBatchSize: 0).maximumBatchSize == 1)
+        }
     }
 
-    private func makeModel(prefixCaching: Bool = true, rotationDebiasing: Bool = false) -> MLXDecisionModel {
+    private func makeModel(
+        prefixCaching: Bool = true,
+        rotationDebiasing: Bool = false,
+        maximumBatchSize: Int = MLXDecisionModel.defaultMaximumBatchSize
+    ) -> MLXDecisionModel {
         let environment = ProcessInfo.processInfo.environment
         return MLXDecisionModel(
             modelID: environment["MLX_MODEL_ID"] ?? MLXDecisionModel.defaultModelID,
             directory: environment["MLX_MODEL_DIRECTORY"].map { URL(fileURLWithPath: $0) },
             rotationDebiasing: rotationDebiasing,
-            prefixCaching: prefixCaching
+            prefixCaching: prefixCaching,
+            maximumBatchSize: maximumBatchSize
         )
     }
 
@@ -221,6 +231,45 @@ import Testing
                 #expect(uncached.diagnostics[index].duration > .zero)
                 #expect(cached.diagnostics[index].duration > .zero)
             }
+        }
+
+        @Test(arguments: [false, true])
+        func batchedAndSeparateResultsMatch(prefixCaching: Bool) async throws {
+            // More questions than one batch holds, a rotated choice, and two questions
+            // that are longer than one prefill step and share most of their instructions,
+            // so that every batching path runs.
+            let items = [
+                "a heavy winter coat", "a pair of sandals", "a red apple", "a slice of pizza",
+                "a hammer", "a bicycle", "a penguin", "a wool scarf", "a sailboat", "a candle",
+            ]
+            let long = Array(repeating: "Consider the customer's history carefully.", count: 120)
+                .joined(separator: " ")
+            let questions: [Question] =
+                items.map { .binary(instructions: "Item: \($0). Does the customer mention this item?") }
+                + [
+                    .choice(instructions: "Route this support ticket.", options: departments),
+                    .binary(instructions: long + " Is the customer asking for a refund?"),
+                    .binary(instructions: long + " Does the customer mention a delivery?"),
+                ]
+
+            let separate = try await DecisionSession(
+                model: makeModel(prefixCaching: false, rotationDebiasing: true, maximumBatchSize: 1),
+                state: .text(ticket)
+            ).decide(questions)
+            let batched = try await DecisionSession(
+                model: makeModel(prefixCaching: prefixCaching, rotationDebiasing: true, maximumBatchSize: 4),
+                state: .text(ticket)
+            ).decide(questions)
+
+            for index in questions.indices {
+                expectClose(
+                    probabilities(batched.answers[index]),
+                    probabilities(separate.answers[index]),
+                    tolerance: 1e-3,
+                    "question \(index)"
+                )
+            }
+            #expect(batched.usage.inputTokenCount == separate.usage.inputTokenCount)
         }
 
         @Test func repeatedQuestionsDoNotChangeThePrefixCache() async throws {

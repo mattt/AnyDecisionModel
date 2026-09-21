@@ -35,6 +35,9 @@ import Foundation
         /// The default system prompt for local decision models.
         public static let defaultSystemPrompt = TokenScoring.defaultSystemPrompt
 
+        /// The default for the largest number of prompts evaluated together in one forward pass.
+        public static let defaultMaximumBatchSize = 16
+
         /// The Hugging Face model identifier.
         public let modelID: String
 
@@ -61,6 +64,8 @@ import Foundation
         /// whose Metal attention kernel applies the causal mask incorrectly
         /// for some split-prefill shapes.
         /// MLX 0.31.2 fixes this.
+        /// For models whose layers use plain key-value caches, such as Qwen3,
+        /// the model passes an explicit causal mask array instead of the affected symbolic mask.
         /// Enable it only after checking cached results for the selected model and workload.
         public var prefixCaching: Bool
 
@@ -76,6 +81,20 @@ import Foundation
         /// The system prompt.
         public var systemPrompt: String
 
+        /// The largest number of prompts evaluated together in one forward pass.
+        ///
+        /// When a request has several questions, or a choice with rotation debiasing,
+        /// the model evaluates the prompt tokens that they share once,
+        /// then evaluates the rest of each prompt in batches of up to this size.
+        /// A group of prompts that shares more tokens, such as the rotations of one choice,
+        /// also shares the evaluation of those tokens.
+        /// Batches also stay within fixed limits on padded tokens and cache memory.
+        /// Batching applies to models whose layers use plain key-value caches, such as Qwen3;
+        /// other models evaluate each prompt separately.
+        /// Set it to 1 to evaluate each prompt separately.
+        /// It defaults to ``defaultMaximumBatchSize``.
+        public var maximumBatchSize: Int
+
         /// Creates an MLX decision model.
         ///
         /// - Parameters:
@@ -90,6 +109,8 @@ import Foundation
         ///     if the template omits it and the tokenizer has thinking markers.
         ///     Defaults to `false`.
         ///   - systemPrompt: The system prompt.
+        ///   - maximumBatchSize: The largest number of prompts evaluated together in one forward pass.
+        ///     Defaults to ``defaultMaximumBatchSize``.
         public init(
             modelID: String = MLXDecisionModel.defaultModelID,
             hub: HubClient? = nil,
@@ -98,7 +119,8 @@ import Foundation
             rotationDebiasing: Bool = false,
             prefixCaching: Bool = false,
             closedThinkFallback: Bool = false,
-            systemPrompt: String = MLXDecisionModel.defaultSystemPrompt
+            systemPrompt: String = MLXDecisionModel.defaultSystemPrompt,
+            maximumBatchSize: Int = MLXDecisionModel.defaultMaximumBatchSize
         ) {
             self.modelID = modelID
             self.hub = hub
@@ -108,6 +130,7 @@ import Foundation
             self.prefixCaching = prefixCaching
             self.closedThinkFallback = closedThinkFallback
             self.systemPrompt = systemPrompt
+            self.maximumBatchSize = max(1, maximumBatchSize)
         }
 
         public var capabilities: DecisionCapabilities {
@@ -232,6 +255,33 @@ import Foundation
 
     private let containerCache = ModelContainerCache()
 
+    /// A lock that an async caller can hold across suspension points.
+    ///
+    /// Waiting callers get the lock in the order in which they asked for it.
+    private actor AsyncMutex {
+        private var isLocked = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func withLock<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
+            if isLocked {
+                await withCheckedContinuation { waiters.append($0) }
+            }
+            isLocked = true
+            defer {
+                if waiters.isEmpty {
+                    isLocked = false
+                } else {
+                    // The lock stays locked for the next caller.
+                    waiters.removeFirst().resume()
+                }
+            }
+            return try await body()
+        }
+    }
+
+    /// Lets one request at a time tokenize its prompts.
+    private let tokenizationGate = AsyncMutex()
+
     // MARK: - Executor
 
     /// The prompt-prefix cache for one session.
@@ -247,6 +297,7 @@ import Foundation
     private final class MLXDecisionExecutor: DecisionModelExecutor {
         let model: MLXDecisionModel
         private let prefix = PrefixCache()
+        private let tokenizer = Locked<(any MLXLMCommon.Tokenizer)?>(nil)
 
         /// The number of tokens evaluated per forward pass when filling a cache.
         private let prefillStepSize = 512
@@ -267,26 +318,10 @@ import Foundation
             -> DecisionSession.Response
         {
             let container = try await model.loadContainer()
-            return try await container.perform { context in
-                try self.decide(questions, about: state, context: context)
-            }
-        }
-
-        private struct Plan {
-            let question: Question
-            let tokenMap: [[Int]]
-            let rotations: [[Int]]
-        }
-
-        private func decide(
-            _ questions: [Question],
-            about state: DecisionState,
-            context: ModelContext
-        ) throws -> DecisionSession.Response {
-            let tokenizer = context.tokenizer
-            let encode = { (text: String) in tokenizer.encode(text: text, addSpecialTokens: false) }
+            let tokenizer = await tokenizer(from: container)
 
             // Check every token mapping before running inference.
+            let encode = { (text: String) in tokenizer.encode(text: text, addSpecialTokens: false) }
             let plans = try questions.enumerated().map { index, question -> Plan in
                 let labels = TokenScoring.labels(for: question)
                 let tokenMap = try TokenScoring.tokenMap(for: labels, index: index, encode: encode)
@@ -299,46 +334,117 @@ import Foundation
                 return Plan(question: question, tokenMap: tokenMap, rotations: rotations)
             }
 
-            if model.prefixCaching {
-                try preparePrefix(for: state, context: context)
+            // Prompt preparation needs only the CPU, so it runs outside the container's lock.
+            // It can then run during the prefix prefill and during the GPU work of other sessions.
+            async let prepared = tokenizationGate.withLock {
+                try await self.jobs(for: plans, about: state, tokenizer: tokenizer)
             }
+            if model.prefixCaching {
+                try await container.perform { context in
+                    try self.preparePrefix(for: state, context: context)
+                }
+            }
+            let jobs = try await prepared
+
+            return try await container.perform { context in
+                try self.respond(to: plans, jobs: jobs, context: context)
+            }
+        }
+
+        private struct Plan: Sendable {
+            let question: Question
+            let tokenMap: [[Int]]
+            let rotations: [[Int]]
+        }
+
+        /// Returns the container's tokenizer.
+        ///
+        /// The container gives out its tokenizer under its lock,
+        /// so the executor keeps it to not wait for the GPU work of other sessions again.
+        private func tokenizer(from container: ModelContainer) async -> any MLXLMCommon.Tokenizer {
+            if let tokenizer = tokenizer.withLock({ $0 }) { return tokenizer }
+            let tokenizer = await container.tokenizer
+            self.tokenizer.withLock { $0 = tokenizer }
+            return tokenizer
+        }
+
+        /// The number of tasks that tokenize prompts at the same time.
+        ///
+        /// In measurements, tokenization got faster up to 4 tasks and slower above 6,
+        /// so ``tokenizationGate`` also lets only one request tokenize at a time.
+        private let tokenizationTaskCount = 4
+
+        /// Renders and tokenizes one prompt for every question
+        /// and for every option-order rotation of a choice.
+        private func jobs(
+            for plans: [Plan],
+            about state: DecisionState,
+            tokenizer: any MLXLMCommon.Tokenizer
+        ) async throws -> [Job] {
+            let prompts = plans.enumerated().flatMap { planIndex, plan in
+                plan.rotations.map { (planIndex: planIndex, order: $0) }
+            }
+            let taskCount = min(tokenizationTaskCount, prompts.count)
+            return try await withThrowingTaskGroup(of: [(Int, Job)].self) { group in
+                for task in 0 ..< taskCount {
+                    group.addTask {
+                        try stride(from: task, to: prompts.count, by: taskCount).map { index in
+                            try Task.checkCancellation()
+                            let prompt = prompts[index]
+                            let user = TokenScoring.userMessage(
+                                state: state,
+                                question: plans[prompt.planIndex].question,
+                                optionOrder: prompt.order
+                            )
+                            let tokens = try self.promptTokens(user: user, tokenizer: tokenizer)
+                            return (index, Job(planIndex: prompt.planIndex, order: prompt.order, tokens: tokens))
+                        }
+                    }
+                }
+                var jobs = [Job?](repeating: nil, count: prompts.count)
+                for try await lane in group {
+                    for (index, job) in lane { jobs[index] = job }
+                }
+                return jobs.map { $0! }
+            }
+        }
+
+        /// Evaluates the prompts and combines the results into one answer for each question.
+        private func respond(to plans: [Plan], jobs: [Job], context: ModelContext) throws
+            -> DecisionSession.Response
+        {
+            let start = ContinuousClock.now
+            let results = try evaluate(jobs, tokenMaps: plans.map(\.tokenMap), context: context)
+            let elapsed = start.duration(to: .now)
 
             var answers: [Answer] = []
             var diagnostics: [DecisionSession.Diagnostics] = []
             var inputTokenCount = 0
 
-            for plan in plans {
+            for (planIndex, plan) in plans.enumerated() {
                 let isBinary = if case .binary = plan.question { true } else { false }
                 var totals = [Double](repeating: 0, count: plan.tokenMap.count)
                 var mass = 0.0
                 var cachedTokenCount = 0
                 var evaluatedTokenCount = 0
+                var jobCount = 0
 
-                let start = ContinuousClock.now
-                for order in plan.rotations {
-                    try Task.checkCancellation()
-                    let user = TokenScoring.userMessage(
-                        state: state,
-                        question: plan.question,
-                        optionOrder: order
-                    )
-                    let tokens = try promptTokens(user: user, tokenizer: tokenizer)
-                    let result = try logProbabilities(of: tokens, tokenMap: plan.tokenMap, context: context)
+                for (job, result) in zip(jobs, results) where job.planIndex == planIndex {
                     let (logMasses, allowedMass) = TokenScoring.logMasses(result.tokenLogProbabilities)
                     let probabilities = (model.calibration ?? .identity).probabilities(
                         logMasses: logMasses,
                         binary: isBinary
                     )
                     // Position i in this rotation holds answer order[i].
-                    for (position, answerIndex) in order.enumerated() {
+                    for (position, answerIndex) in job.order.enumerated() {
                         totals[answerIndex] += probabilities[position] / Double(plan.rotations.count)
                     }
                     mass += allowedMass / Double(plan.rotations.count)
                     cachedTokenCount += result.cachedTokenCount
-                    evaluatedTokenCount += tokens.count - result.cachedTokenCount
-                    inputTokenCount += tokens.count
+                    evaluatedTokenCount += job.tokens.count - result.cachedTokenCount
+                    inputTokenCount += job.tokens.count
+                    jobCount += 1
                 }
-                let duration = start.duration(to: .now)
 
                 answers.append(TokenScoring.answer(for: plan.question, probabilities: totals))
                 diagnostics.append(
@@ -346,7 +452,8 @@ import Foundation
                         allowedAnswerMass: mass,
                         cachedTokenCount: cachedTokenCount,
                         evaluatedTokenCount: evaluatedTokenCount,
-                        duration: duration
+                        // Batched prompts share the elapsed time in proportion to their number.
+                        duration: elapsed * Double(jobCount) / Double(max(1, jobs.count))
                     )
                 )
             }
@@ -409,7 +516,7 @@ import Foundation
                 return
             }
 
-            let cache = context.model.newCache(parameters: nil)
+            let cache = makeCache(for: context.model)
             try prefill(prefixTokens, cache: cache, model: context.model)
             prefix.tokens = prefixTokens
             prefix.layers = cache
@@ -423,9 +530,15 @@ import Foundation
                 let end = min(start + prefillStepSize, tokens.count)
                 let input = MLXArray(tokens[start ..< end].map { Int32($0) })[.newAxis]
                 _ = model(input, cache: cache)
-                eval(cache)
+                eval(cache.flatMap(\.state))
                 start = end
             }
+        }
+
+        private struct Job: Sendable {
+            let planIndex: Int
+            let order: [Int]
+            let tokens: [Int]
         }
 
         private struct EvaluationResult {
@@ -433,48 +546,294 @@ import Foundation
             let cachedTokenCount: Int
         }
 
-        /// Runs the prompt and returns the next-token log-probabilities of each label's tokens,
-        /// in label position order.
-        private func logProbabilities(
-            of tokens: [Int],
-            tokenMap: [[Int]],
+        /// The largest number of padded prompt tokens in one batched forward pass.
+        ///
+        /// The model computes logits for every position, so this bounds the size of that array.
+        private let batchTokenBudget = 1_024
+
+        /// The largest number of bytes of cached keys and values copied for one batch.
+        ///
+        /// Attention needs a copy of the shared keys and values for each prompt in a batch.
+        private let batchCacheByteBudget = 2 << 30
+
+        /// The smallest number of tokens in a shared prefill.
+        ///
+        /// MLX selects other kernels for a short pass, which round differently,
+        /// so a shorter prefill could make an answer change with the other questions in the request.
+        /// A short prefill also saves little work.
+        private let minimumSharedPrefillLength = 32
+
+        /// The prompts, the caches, and the results of one call to `evaluate`.
+        private struct Evaluation {
+            let jobs: [Job]
+            let tokenMaps: [[[Int]]]
+            let context: ModelContext
+            let maximumBatchSize: Int
+            var results: [EvaluationResult?]
+            /// The number of tokens that the current prompts read from the session's prefix cache.
+            var cachedTokenCount = 0
+        }
+
+        /// Scores every prompt and returns the results in prompt order.
+        ///
+        /// When the model's cache supports it,
+        /// prompts that begin with the same tokens share one evaluation of those tokens,
+        /// and the remaining tokens of several prompts run in one forward pass.
+        private func evaluate(
+            _ jobs: [Job],
+            tokenMaps: [[[Int]]],
             context: ModelContext
-        ) throws -> EvaluationResult {
-            var cache: [any KVCache]
-            var start = 0
+        ) throws -> [EvaluationResult] {
+            let empty = makeCache(for: context.model)
+            let maximumBatchSize = empty is [BatchKVCache] ? model.maximumBatchSize : 1
 
-            if model.prefixCaching, let layers = prefix.layers,
-                tokens.count > prefix.tokens.count,
-                tokens.starts(with: prefix.tokens)
-            {
-                // Copy the prefix cache so that this question cannot change it.
-                cache = layers.map { $0.copy() }
-                start = prefix.tokens.count
+            // Prompts that are evaluated together must all begin with the prefix cache to use it.
+            let groups = maximumBatchSize > 1 ? [Array(jobs.indices)] : jobs.indices.map { [$0] }
+            var evaluation = Evaluation(
+                jobs: jobs,
+                tokenMaps: tokenMaps,
+                context: context,
+                maximumBatchSize: maximumBatchSize,
+                results: [EvaluationResult?](repeating: nil, count: jobs.count)
+            )
+            for group in groups {
+                var cache = empty
+                var depth = 0
+                if model.prefixCaching, let layers = prefix.layers,
+                    group.allSatisfy({
+                        jobs[$0].tokens.count > prefix.tokens.count && jobs[$0].tokens.starts(with: prefix.tokens)
+                    })
+                {
+                    cache = layers
+                    depth = prefix.tokens.count
+                }
+                evaluation.cachedTokenCount = depth
+                let rest = try score(group, after: depth, cache: cache, in: &evaluation)
+                try scoreBatches(of: rest, after: depth, cache: cache, in: &evaluation)
+            }
+            return evaluation.results.map { $0! }
+        }
+
+        /// Scores the groups of prompts for which a shared prefill saves work,
+        /// and returns the prompts that remain.
+        ///
+        /// `cache` holds the first `depth` tokens of every prompt in the group and is not changed.
+        /// The prompts form a prefix tree.
+        /// This method evaluates the tokens that the whole group shares,
+        /// then does the same for each subgroup that continues with the same token.
+        private func score(
+            _ group: [Int],
+            after depth: Int,
+            cache: [any KVCache],
+            in evaluation: inout Evaluation
+        ) throws -> [Int] {
+            guard group.count > 1 else { return group }
+            let jobs = evaluation.jobs
+
+            // Find the number of tokens that every prompt shares.
+            // Prompts can be identical, so each prompt keeps at least one token of its own.
+            let first = jobs[group[0]].tokens
+            var common = group.map { jobs[$0].tokens.count }.min()! - 1
+            for job in group.dropFirst() {
+                common = zip(first, jobs[job].tokens).prefix(common).prefix { $0 == $1 }.count
+            }
+
+            var depth = depth
+            var cache = cache
+            let extended = common - depth >= minimumSharedPrefillLength
+            if extended {
+                cache = cache.map { $0.copy() }
+                try prefill(Array(first[depth ..< common]), cache: cache, model: evaluation.context.model)
+                depth = common
+            }
+
+            // Prompts that continue with the same token can share more tokens.
+            var rest: [Int] = []
+            var subgroups: [Int: [Int]] = [:]
+            for job in group {
+                subgroups[jobs[job].tokens[common], default: []].append(job)
+            }
+            for subgroup in subgroups.values.sorted(by: { $0[0] < $1[0] }) {
+                // Identical prompts, or a prompt that begins another, cannot be divided further.
+                rest +=
+                    subgroup.count < group.count
+                    ? try score(subgroup, after: depth, cache: cache, in: &evaluation) : subgroup
+            }
+
+            guard extended else { return rest }
+            try scoreBatches(of: rest, after: depth, cache: cache, in: &evaluation)
+            return []
+        }
+
+        /// Scores prompts in batches.
+        ///
+        /// `cache` holds the first `depth` tokens of every prompt and is not changed.
+        private func scoreBatches(
+            of group: [Int],
+            after depth: Int,
+            cache: [any KVCache],
+            in evaluation: inout Evaluation
+        ) throws {
+            let jobs = evaluation.jobs
+            let model = evaluation.context.model
+
+            // Each prompt in a batch gets a copy of the cached keys and values.
+            let cacheByteCount = cache.flatMap(\.state).reduce(0) { $0 + $1.nbytes }
+            let maximumBatchSize = min(
+                evaluation.maximumBatchSize,
+                max(1, batchCacheByteBudget / max(1, cacheByteCount))
+            )
+
+            // Sort the prompts by length so that each batch needs little padding.
+            var batches: [[Int]] = []
+            for job in group.sorted(by: { jobs[$0].tokens.count < jobs[$1].tokens.count }) {
+                // This prompt is the longest so far, so it sets the width of the batch.
+                let width = jobs[job].tokens.count - depth
+                if let count = batches.last?.count,
+                    count < maximumBatchSize, (count + 1) * width <= batchTokenBudget
+                {
+                    batches[batches.count - 1].append(job)
+                } else {
+                    batches.append([job])
+                }
+            }
+
+            for batch in batches {
+                try Task.checkCancellation()
+                var suffixes = batch.map { Array(jobs[$0].tokens[depth...]) }
+                // Only a ``BatchKVCache`` allows a batch size above 1.
+                let cache: [any KVCache] =
+                    batch.count == 1
+                    ? cache.map { $0.copy() }
+                    : cache.map { ($0 as! BatchKVCache).broadcast(to: batch.count) }
+
+                if batch.count == 1, suffixes[0].count > prefillStepSize {
+                    // A prompt too long for one forward pass has all but its last token prefilled.
+                    try prefill(Array(suffixes[0].dropLast()), cache: cache, model: model)
+                    suffixes[0] = [suffixes[0].last!]
+                }
+
+                // Right-pad each suffix with its last token.
+                // Causal attention keeps the padding from affecting the real positions.
+                let width = suffixes.map(\.count).max()!
+                var input: [Int32] = []
+                input.reserveCapacity(batch.count * width)
+                for suffix in suffixes {
+                    input += suffix.map { Int32($0) }
+                    input += [Int32](repeating: Int32(suffix.last!), count: width - suffix.count)
+                }
+                let logits = model(MLXArray(input, [batch.count, width]), cache: cache)
+                let vocabularySize = logits.dim(-1)
+
+                // Read the logits after each prompt's last real token.
+                let positions = suffixes.enumerated().map { Int32($0 * width + $1.count - 1) }
+                let last = take(logits.reshaped(-1, vocabularySize), MLXArray(positions), axis: 0)
+                    .asType(.float32)
+                let logProbabilities = last - logSumExp(last, axis: -1, keepDims: true)
+
+                var indices: [Int32] = []
+                for (row, job) in batch.enumerated() {
+                    for id in evaluation.tokenMaps[jobs[job].planIndex].joined() {
+                        indices.append(Int32(row * vocabularySize + id))
+                    }
+                }
+                let gathered = take(logProbabilities.reshaped(-1), MLXArray(indices)).asArray(Float.self)
+
+                var offset = 0
+                for job in batch {
+                    // Group the log-probabilities by label, in label position order.
+                    let tokenLogProbabilities = evaluation.tokenMaps[jobs[job].planIndex].map { ids in
+                        defer { offset += ids.count }
+                        return gathered[offset ..< offset + ids.count].map(Double.init)
+                    }
+                    evaluation.results[job] = EvaluationResult(
+                        tokenLogProbabilities: tokenLogProbabilities,
+                        cachedTokenCount: evaluation.cachedTokenCount
+                    )
+                }
+            }
+        }
+
+        /// Returns an empty cache for the model.
+        ///
+        /// Models whose layers all use plain key-value caches get a ``BatchKVCache`` for each layer.
+        /// It can hold a batch of prompts,
+        /// and it uses an explicit causal mask when queries follow cached keys.
+        private func makeCache(for model: any LanguageModel) -> [any KVCache] {
+            let cache = model.newCache(parameters: nil)
+            guard cache.allSatisfy({ type(of: $0) == KVCacheSimple.self }) else { return cache }
+            return cache.map { _ in BatchKVCache() }
+        }
+    }
+
+    /// A key-value cache that holds a batch of sequences with a shared length.
+    ///
+    /// It masks attention with an explicit causal mask array.
+    /// The symbolic causal mask in MLX 0.31.1 is wrong for some shapes
+    /// in which the queries follow cached keys.
+    private final class BatchKVCache: KVCache {
+        private var keys: MLXArray?
+        private var values: MLXArray?
+        private(set) var offset = 0
+
+        var maxSize: Int? { nil }
+
+        func innerState() -> [MLXArray] {
+            [keys, values].compactMap { $0 }
+        }
+
+        func update(keys: MLXArray, values: MLXArray) -> (MLXArray, MLXArray) {
+            if let currentKeys = self.keys, let currentValues = self.values {
+                self.keys = concatenated([currentKeys, keys], axis: 2)
+                self.values = concatenated([currentValues, values], axis: 2)
             } else {
-                cache = context.model.newCache(parameters: nil)
+                self.keys = keys
+                self.values = values
             }
+            offset += keys.dim(2)
+            return (self.keys!, self.values!)
+        }
 
-            let cachedTokenCount = start
-            let body = Array(tokens[start...])
-            if body.count > prefillStepSize {
-                try prefill(Array(body.dropLast()), cache: cache, model: context.model)
-                start = tokens.count - 1
+        var state: [MLXArray] {
+            get { innerState() }
+            set {
+                keys = newValue.first
+                values = newValue.last
+                offset = keys?.dim(2) ?? 0
             }
+        }
 
-            let input = MLXArray(tokens[start...].map { Int32($0) })[.newAxis]
-            let logits = context.model(input, cache: cache)[0, -1].asType(.float32)
-            let logProbabilities = logits - logSumExp(logits)
+        var metaState: [String] {
+            get { [""] }
+            set {}
+        }
 
-            let ids = tokenMap.flatMap { $0 }
-            let gathered = logProbabilities[MLXArray(ids.map { Int32($0) })].asArray(Float.self)
+        var isTrimmable: Bool { false }
 
-            var result: [[Double]] = []
-            var offset = 0
-            for tokens in tokenMap {
-                result.append(gathered[offset ..< offset + tokens.count].map(Double.init))
-                offset += tokens.count
-            }
-            return EvaluationResult(tokenLogProbabilities: result, cachedTokenCount: cachedTokenCount)
+        func trim(_ n: Int) -> Int { 0 }
+
+        func makeMask(n: Int, windowSize: Int?, returnArray: Bool) -> MLXFast.ScaledDotProductAttentionMaskMode {
+            n == 1 ? .none : .array(createCausalMask(n: n, offset: offset, windowSize: windowSize))
+        }
+
+        func copy() -> any KVCache {
+            let copy = BatchKVCache()
+            copy.keys = keys
+            copy.values = values
+            copy.offset = offset
+            return copy
+        }
+
+        /// Returns a cache that holds `count` copies of this cache's one sequence.
+        ///
+        /// The copies are broadcast views,
+        /// so the keys and values are copied once, when the next update concatenates them.
+        func broadcast(to count: Int) -> BatchKVCache {
+            let copy = BatchKVCache()
+            copy.keys = keys.map { MLX.broadcast($0, to: [count] + $0.shape.dropFirst()) }
+            copy.values = values.map { MLX.broadcast($0, to: [count] + $0.shape.dropFirst()) }
+            copy.offset = offset
+            return copy
         }
     }
 #endif
