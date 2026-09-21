@@ -1,0 +1,67 @@
+# Swift comes from Xcode or the Command Line Tools, not from mise.
+# MLX tasks need Apple silicon and the Metal toolchain.
+
+[tasks.setup]
+description = "Resolve Swift package dependencies for the library"
+run = "mise run _swift -- package resolve"
+
+[tasks.build]
+description = "Build the core library and the Jev backend"
+run = "mise run _swift -- build"
+
+[tasks."build:mlx"]
+description = "Build the library with the MLX trait"
+run = "mise run _swift:mlx -- build --traits MLX"
+
+[tasks."build:ios"]
+description = "Compile the core library for iOS"
+run = "xcodebuild build -scheme AnyDecisionModel -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO -quiet"
+
+[tasks."build:linux"]
+description = "Build and test the core library in a Linux container (needs Docker)"
+run = "docker run --rm -v \"$PWD\":/package -w /package swift:6.2 swift test"
+
+[tasks.test]
+description = "Run the library tests without MLX"
+run = "mise run _swift -- test"
+
+[tasks."test:mlx"]
+description = "Run the library tests with MLX integration tests (downloads Qwen3 4B)"
+env = { ENABLE_MLX_TESTS = "1" }
+run = "mise run _swift:mlx -- test --traits MLX"
+
+[tasks."_swift"]
+hide = true
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    exec xcrun swift "$@"
+fi
+
+exec swift "$@"
+'''
+
+[tasks."_swift:mlx"]
+hide = true
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! xcrun --find metal >/dev/null 2>&1; then
+    metal_bin=""
+    for candidate in /private/var/run/com.apple.security.cryptexd/mnt/*MetalToolchain*/Metal.xctoolchain/usr/bin; do
+        if [ -x "$candidate/metal" ]; then
+            metal_bin="$candidate"
+        fi
+    done
+    if [ -z "$metal_bin" ]; then
+        echo "error: Metal compiler not found. Run: xcodebuild -downloadComponent MetalToolchain" >&2
+        exit 1
+    fi
+    export PATH="$metal_bin:$PATH"
+fi
+
+exec xcrun swift "$@"
+'''
