@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  test-macos:
+    name: Swift ${{ matrix.swift }} on macOS 26 with Xcode ${{ matrix.xcode }}
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: "/Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - swift: "6.2"
+            xcode: "26.0"
+          - swift: "6.3"
+            xcode: "26.6"
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode }}-core-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode }}-core-spm-
+
+      - name: Lint
+        run: swift format lint --strict --recursive Package.swift Sources Tests
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test --skip-build
+
+  test-mlx:
+    name: Swift 6.4 with MLX on Xcode 27
+    # Swift 6.4's default build system compiles MLX's Metal shaders.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-27-mlx-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode-27-mlx-spm-
+
+      - name: Build with MLX
+        run: mise run _swift:mlx -- build --build-tests --traits MLX
+
+      - name: Test with MLX
+        # Inference tests stay disabled unless ENABLE_MLX_TESTS is set.
+        run: mise run _swift:mlx -- test --skip-build --traits MLX
+
+  build-ios:
+    name: Build for iOS with Xcode 26.6
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: "/Applications/Xcode_26.6.app/Contents/Developer"
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build for iOS
+        run: xcodebuild build -scheme AnyDecisionModel -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO
+
+  test-linux:
+    name: Swift ${{ matrix.swift }} on Linux
+    runs-on: ubuntu-latest
+    container: swift:${{ matrix.swift }}
+    strategy:
+      fail-fast: false
+      matrix:
+        swift: ["6.2.4", "6.3.3"]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ matrix.swift }}-core-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swift-${{ matrix.swift }}-core-spm-
+
+      - name: Lint
+        run: swift format lint --strict --recursive Package.swift Sources Tests
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test --skip-build
