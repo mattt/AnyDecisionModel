@@ -83,6 +83,27 @@ enum TokenScoring {
         return lines.joined(separator: "\n") + "\n\nAllowed answers: " + labels.joined(separator: ", ")
     }
 
+    /// Appends a closed thinking block when a chat template ignores the thinking flag.
+    ///
+    /// - Parameters:
+    ///   - tokens: The rendered prompt tokens.
+    ///   - closedThinkTokens: The tokens for `<think>\n\n</think>\n\n`,
+    ///     or an empty array if the tokenizer has no thinking markers.
+    ///   - decode: A function that decodes tokens with special tokens kept.
+    static func appendingClosedThinkBlock(
+        to tokens: [Int],
+        closedThinkTokens: [Int],
+        decode: ([Int]) -> String
+    ) -> [Int] {
+        guard !closedThinkTokens.isEmpty else { return tokens }
+
+        // A template can encode the markers as several tokens.
+        // Allow four extra tokens and check the decoded text.
+        let tail = Array(tokens.suffix(closedThinkTokens.count + 4))
+        guard !decode(tail).contains("</think>") else { return tokens }
+        return tokens + closedThinkTokens
+    }
+
     /// Returns the single-token variants of an answer label.
     ///
     /// Variants cover case changes and an optional leading space.
