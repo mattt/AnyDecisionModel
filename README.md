@@ -172,9 +172,11 @@ The model passes `enable_thinking: false` to the chat template.
 > the default Qwen3 Instruct model retains these markers but has no thinking mode.
 
 Sessions share loaded weights.
-Each session keeps a cache for the prompt prefix that contains the state,
+Prefix caching is off by default because MLX 0.31.1 has a causal-mask error
+for some split-prefill shapes.
+With `prefixCaching: true`, each session keeps a cache for the state prefix,
 and each question runs on a copy of that cache.
-Set `prefixCaching: false` to compare against uncached evaluation.
+Check cached and uncached results for your model and workload before enabling it.
 
 Language models tend to prefer an option because of its position in the list,
 for example the option labeled A.
