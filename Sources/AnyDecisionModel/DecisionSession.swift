@@ -205,11 +205,31 @@ extension DecisionSession {
         /// The number of prompt tokens evaluated for this answer.
         public var evaluatedTokenCount: Int
 
+        /// The elapsed time for this answer, measured with a continuous clock.
+        ///
+        /// For MLX models, this includes prompt preparation and scoring across all
+        /// option-order rotations, including evaluation of the model's output.
+        /// It excludes model loading and filling the session's shared prefix cache.
+        /// The value is zero if no duration was recorded.
+        public var duration: Duration
+
         /// Creates diagnostics for one answer.
-        public init(allowedAnswerMass: Double, cachedTokenCount: Int, evaluatedTokenCount: Int) {
+        ///
+        /// - Parameters:
+        ///   - allowedAnswerMass: The probability mass of the allowed answer tokens.
+        ///   - cachedTokenCount: The number of prompt tokens read from the prefix cache.
+        ///   - evaluatedTokenCount: The number of prompt tokens evaluated for this answer.
+        ///   - duration: The elapsed time for this answer, or zero if not recorded.
+        public init(
+            allowedAnswerMass: Double,
+            cachedTokenCount: Int,
+            evaluatedTokenCount: Int,
+            duration: Duration = .zero
+        ) {
             self.allowedAnswerMass = allowedAnswerMass
             self.cachedTokenCount = cachedTokenCount
             self.evaluatedTokenCount = evaluatedTokenCount
+            self.duration = duration
         }
     }
 }
