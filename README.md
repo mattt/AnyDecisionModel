@@ -172,8 +172,12 @@ The model passes `enable_thinking: false` to the chat template.
 > the default Qwen3 Instruct model retains these markers but has no thinking mode.
 
 Sessions share loaded weights.
-Prefix caching is off by default because MLX 0.31.1 has a causal-mask error
+Prefix caching is off by default.
+mlx-swift 0.31.6 and earlier include MLX 0.31.1,
+whose Metal attention kernel applies the causal mask incorrectly
 for some split-prefill shapes.
+MLX 0.31.2 fixes this
+([ml-explore/mlx#3271](https://github.com/ml-explore/mlx/pull/3271)).
 With `prefixCaching: true`, each session keeps a cache for the state prefix,
 and each question runs on a copy of that cache.
 Check cached and uncached results for your model and workload before enabling it.

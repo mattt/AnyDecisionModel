@@ -56,8 +56,11 @@ import Foundation
 
         /// Whether sessions reuse a cache for the shared prompt prefix.
         ///
-        /// This is off by default because MLX 0.31.1 has a causal-mask error
+        /// This is off by default.
+        /// mlx-swift 0.31.6 and earlier include MLX 0.31.1,
+        /// whose Metal attention kernel applies the causal mask incorrectly
         /// for some split-prefill shapes.
+        /// MLX 0.31.2 fixes this.
         /// Enable it only after checking cached results for the selected model and workload.
         public var prefixCaching: Bool
 
