@@ -58,8 +58,8 @@ Add the package and enable the `MLX` trait if you want the local backend:
 
 ```swift
 .package(
-    url: "https://github.com/<owner>/AnyDecisionModel",
-    branch: "main",
+    url: "https://github.com/mattt/AnyDecisionModel",
+    from: "0.1.0",
     traits: ["MLX"]
 )
 ```
