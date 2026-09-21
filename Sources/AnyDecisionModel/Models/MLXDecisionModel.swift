@@ -56,7 +56,12 @@ import Foundation
 
         /// Whether sessions reuse a cache for the shared prompt prefix.
         ///
-        /// Turn this off to compare cached and uncached results.
+        /// This is off by default.
+        /// mlx-swift 0.31.6 and earlier include MLX 0.31.1,
+        /// whose Metal attention kernel applies the causal mask incorrectly
+        /// for some split-prefill shapes.
+        /// MLX 0.31.2 fixes this.
+        /// Enable it only after checking cached results for the selected model and workload.
         public var prefixCaching: Bool
 
         /// Whether to append a closed thinking block when the prompt has none.
@@ -91,7 +96,7 @@ import Foundation
             directory: URL? = nil,
             calibration: Calibration? = nil,
             rotationDebiasing: Bool = false,
-            prefixCaching: Bool = true,
+            prefixCaching: Bool = false,
             closedThinkFallback: Bool = false,
             systemPrompt: String = MLXDecisionModel.defaultSystemPrompt
         ) {

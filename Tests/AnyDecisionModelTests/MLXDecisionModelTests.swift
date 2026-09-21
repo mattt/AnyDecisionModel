@@ -23,6 +23,13 @@ import Testing
 
     private final class TestBundleMarker: NSObject {}
 
+    @Suite("MLXDecisionModel configuration")
+    struct MLXDecisionModelConfigurationTests {
+        @Test func prefixCachingIsDisabledByDefault() {
+            #expect(MLXDecisionModel().prefixCaching == false)
+        }
+    }
+
     private func makeModel(prefixCaching: Bool = true, rotationDebiasing: Bool = false) -> MLXDecisionModel {
         let environment = ProcessInfo.processInfo.environment
         return MLXDecisionModel(
