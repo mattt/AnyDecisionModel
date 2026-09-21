@@ -295,6 +295,7 @@ import Foundation
                 var cachedTokenCount = 0
                 var evaluatedTokenCount = 0
 
+                let start = ContinuousClock.now
                 for order in plan.rotations {
                     try Task.checkCancellation()
                     let user = TokenScoring.userMessage(
@@ -318,13 +319,15 @@ import Foundation
                     evaluatedTokenCount += tokens.count - result.cachedTokenCount
                     inputTokenCount += tokens.count
                 }
+                let duration = start.duration(to: .now)
 
                 answers.append(TokenScoring.answer(for: plan.question, probabilities: totals))
                 diagnostics.append(
                     DecisionSession.Diagnostics(
                         allowedAnswerMass: mass,
                         cachedTokenCount: cachedTokenCount,
-                        evaluatedTokenCount: evaluatedTokenCount
+                        evaluatedTokenCount: evaluatedTokenCount,
+                        duration: duration
                     )
                 )
             }

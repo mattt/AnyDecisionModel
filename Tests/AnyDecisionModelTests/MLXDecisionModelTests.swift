@@ -99,8 +99,9 @@ import Testing
             #expect(anger.value > 1)
         }
 
-        @Test func diagnosticsReportAllowedAnswerMass() async throws {
-            let session = DecisionSession(model: makeModel(), state: .text(ticket))
+        @Test(arguments: [false, true])
+        func diagnosticsReportAllowedAnswerMassAndDuration(rotationDebiasing: Bool) async throws {
+            let session = DecisionSession(model: makeModel(rotationDebiasing: rotationDebiasing), state: .text(ticket))
             let response = try await session.decide(questions)
             #expect(response.modelID == makeModel().modelID)
             #expect(response.usage.inputTokenCount > 0)
@@ -110,6 +111,7 @@ import Testing
                 #expect(diagnostics.allowedAnswerMass > 0 && diagnostics.allowedAnswerMass <= 1)
                 #expect(diagnostics.cachedTokenCount > 0)
                 #expect(diagnostics.evaluatedTokenCount > 0)
+                #expect(diagnostics.duration > .zero)
             }
         }
 
@@ -190,6 +192,8 @@ import Testing
                 )
                 #expect(uncached.diagnostics[index].cachedTokenCount == 0)
                 #expect(cached.diagnostics[index].cachedTokenCount > 0)
+                #expect(uncached.diagnostics[index].duration > .zero)
+                #expect(cached.diagnostics[index].duration > .zero)
             }
         }
 
