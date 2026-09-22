@@ -53,7 +53,8 @@ import Foundation
         /// Whether choice questions are asked once per rotation of the option order
         /// and the results averaged.
         ///
-        /// This reduces position bias and costs one forward pass per option.
+        /// This reduces position bias and requires one prompt evaluation per option.
+        /// Several of these evaluations can share a batched forward pass.
         /// It is off by default.
         public var rotationDebiasing: Bool
 

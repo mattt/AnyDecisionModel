@@ -184,7 +184,7 @@ For models whose layers use plain key-value caches, such as Qwen3,
 the model passes an explicit causal mask array instead of the affected symbolic mask.
 Check cached and uncached results for your model and workload before enabling it.
 
-When `decide(_:)` receives several questions,
+When `decide(_:)` receives several questions or a choice with rotation debiasing,
 the model evaluates their prompts in batches,
 with up to `maximumBatchSize` prompts in one forward pass.
 The default is 16; set it to 1 to evaluate each prompt separately.
@@ -200,7 +200,8 @@ To reduce this position bias, set `rotationDebiasing: true`.
 The model then asks each choice question once for every rotation of the option order,
 so that each option appears in each position once,
 and averages the probabilities.
-A choice with _n_ options costs _n_ forward passes.
+A choice with _n_ options requires _n_ prompt evaluations.
+Several of these evaluations can share a batched forward pass.
 This setting is off by default.
 
 Each answer's `DecisionSession.Diagnostics` reports the allowed-answer mass:
