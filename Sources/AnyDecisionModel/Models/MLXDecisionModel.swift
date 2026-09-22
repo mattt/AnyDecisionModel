@@ -84,10 +84,8 @@ import Foundation
         /// The largest number of prompts evaluated together in one forward pass.
         ///
         /// When a request has several questions, or a choice with rotation debiasing,
-        /// the model evaluates the prompt tokens that they share once,
-        /// then evaluates the rest of each prompt in batches of up to this size.
-        /// A group of prompts that shares more tokens, such as the rotations of one choice,
-        /// also shares the evaluation of those tokens.
+        /// the model evaluates their prompts in batches of up to this size.
+        /// Only the session's prefix cache can share evaluation across prompts.
         /// Batches also stay within fixed limits on padded tokens and cache memory.
         /// Batching applies to models whose layers use plain key-value caches, such as Qwen3;
         /// other models evaluate each prompt separately.
@@ -257,30 +255,6 @@ import Foundation
     }
 
     private let containerCache = ModelContainerCache()
-
-    /// A lock that an async caller can hold across suspension points.
-    ///
-    /// Waiting callers get the lock in the order in which they asked for it.
-    private actor AsyncMutex {
-        private var isLocked = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
-
-        func withLock<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
-            if isLocked {
-                await withCheckedContinuation { waiters.append($0) }
-            }
-            isLocked = true
-            defer {
-                if waiters.isEmpty {
-                    isLocked = false
-                } else {
-                    // The lock stays locked for the next caller.
-                    waiters.removeFirst().resume()
-                }
-            }
-            return try await body()
-        }
-    }
 
     /// Lets one request at a time tokenize its prompts.
     private let tokenizationGate = AsyncMutex()
@@ -564,13 +538,6 @@ import Foundation
         /// Attention needs a copy of the shared keys and values for each prompt in a batch.
         private let batchCacheByteBudget = 2 << 30
 
-        /// The smallest number of tokens in a shared prefill.
-        ///
-        /// MLX selects other kernels for a short pass, which round differently,
-        /// so a shorter prefill could make an answer change with the other questions in the request.
-        /// A short prefill also saves little work.
-        private let minimumSharedPrefillLength = 32
-
         /// The prompts, the caches, and the results of one call to `evaluate`.
         private struct Evaluation {
             let jobs: [Job]
@@ -584,9 +551,9 @@ import Foundation
 
         /// Scores every prompt and returns the results in prompt order.
         ///
-        /// When the model's cache supports it,
-        /// prompts that begin with the same tokens share one evaluation of those tokens,
-        /// and the remaining tokens of several prompts run in one forward pass.
+        /// When the model's cache supports it, several prompts run in one forward pass.
+        /// Prefill boundaries must not depend on the other prompts in the request:
+        /// changing those boundaries can change probabilities through rounding.
         private func evaluate(
             _ jobs: [Job],
             tokenMaps: [[[Int]]],
@@ -616,61 +583,9 @@ import Foundation
                     depth = prefix.tokens.count
                 }
                 evaluation.cachedTokenCount = depth
-                let rest = try score(group, after: depth, cache: cache, in: &evaluation)
-                try scoreBatches(of: rest, after: depth, cache: cache, in: &evaluation)
+                try scoreBatches(of: group, after: depth, cache: cache, in: &evaluation)
             }
             return evaluation.results.map { $0! }
-        }
-
-        /// Scores the groups of prompts for which a shared prefill saves work,
-        /// and returns the prompts that remain.
-        ///
-        /// `cache` holds the first `depth` tokens of every prompt in the group and is not changed.
-        /// The prompts form a prefix tree.
-        /// This method evaluates the tokens that the whole group shares,
-        /// then does the same for each subgroup that continues with the same token.
-        private func score(
-            _ group: [Int],
-            after depth: Int,
-            cache: [any KVCache],
-            in evaluation: inout Evaluation
-        ) throws -> [Int] {
-            guard group.count > 1 else { return group }
-            let jobs = evaluation.jobs
-
-            // Find the number of tokens that every prompt shares.
-            // Prompts can be identical, so each prompt keeps at least one token of its own.
-            let first = jobs[group[0]].tokens
-            var common = group.map { jobs[$0].tokens.count }.min()! - 1
-            for job in group.dropFirst() {
-                common = zip(first, jobs[job].tokens).prefix(common).prefix { $0 == $1 }.count
-            }
-
-            var depth = depth
-            var cache = cache
-            let extended = common - depth >= minimumSharedPrefillLength
-            if extended {
-                cache = cache.map { $0.copy() }
-                try prefill(Array(first[depth ..< common]), cache: cache, model: evaluation.context.model)
-                depth = common
-            }
-
-            // Prompts that continue with the same token can share more tokens.
-            var rest: [Int] = []
-            var subgroups: [Int: [Int]] = [:]
-            for job in group {
-                subgroups[jobs[job].tokens[common], default: []].append(job)
-            }
-            for subgroup in subgroups.values.sorted(by: { $0[0] < $1[0] }) {
-                // Identical prompts, or a prompt that begins another, cannot be divided further.
-                rest +=
-                    subgroup.count < group.count
-                    ? try score(subgroup, after: depth, cache: cache, in: &evaluation) : subgroup
-            }
-
-            guard extended else { return rest }
-            try scoreBatches(of: rest, after: depth, cache: cache, in: &evaluation)
-            return []
         }
 
         /// Scores prompts in batches.

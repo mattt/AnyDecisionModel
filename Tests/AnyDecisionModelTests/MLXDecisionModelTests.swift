@@ -245,8 +245,8 @@ import Testing
         @Test(arguments: [false, true])
         func batchedAndSeparateResultsMatch(prefixCaching: Bool) async throws {
             // More questions than one batch holds, a rotated choice, and two questions
-            // that are longer than one prefill step and share most of their instructions,
-            // so that every batching path runs.
+            // that are longer than one prefill step and share most of their instructions.
+            // Splitting at that shared prefix used to change Qwen3 0.6B probabilities by 0.0053.
             let items = [
                 "a heavy winter coat", "a pair of sandals", "a red apple", "a slice of pizza",
                 "a hammer", "a bicycle", "a penguin", "a wool scarf", "a sailboat", "a candle",
@@ -279,6 +279,21 @@ import Testing
                 )
             }
             #expect(batched.usage.inputTokenCount == separate.usage.inputTokenCount)
+
+            // A long prompt must keep its prefill boundaries when other questions are removed
+            // or reordered, including when the session's prefix cache is enabled.
+            let model = makeModel(prefixCaching: prefixCaching, rotationDebiasing: true, maximumBatchSize: 4)
+            let reversed = try await DecisionSession(model: model, state: .text(ticket))
+                .decide(questions.reversed())
+            for index in questions.indices.suffix(2) {
+                let alone = try await DecisionSession(model: model, state: .text(ticket)).decide(questions[index])
+                expectClose(probabilities(batched.answers[index]), probabilities(alone), tolerance: 1e-6)
+                expectClose(
+                    probabilities(reversed.answers[questions.count - 1 - index]),
+                    probabilities(alone),
+                    tolerance: 1e-6
+                )
+            }
         }
 
         @Test func repeatedQuestionsDoNotChangeThePrefixCache() async throws {
