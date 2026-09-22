@@ -28,15 +28,34 @@ import Testing
         @Test func prefixCachingIsDisabledByDefault() {
             #expect(MLXDecisionModel().prefixCaching == false)
         }
+
+        @Test func batchSizeHasADefaultAndIsAtLeast1() {
+            #expect(MLXDecisionModel().maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize)
+            #expect(MLXDecisionModel(maximumBatchSize: 0).maximumBatchSize == 1)
+        }
+
+        @Test(arguments: [(Int.min, 1), (-1, 1), (0, 1), (1, 1), (4, 4), (Int.max, Int.max)])
+        func batchSizeIsClampedOnAssignment(value: Int, expected: Int) {
+            var model = MLXDecisionModel()
+            model.maximumBatchSize = value
+            #expect(model.maximumBatchSize == expected)
+            model.maximumBatchSize = 8
+            #expect(model.maximumBatchSize == 8)
+        }
     }
 
-    private func makeModel(prefixCaching: Bool = true, rotationDebiasing: Bool = false) -> MLXDecisionModel {
+    private func makeModel(
+        prefixCaching: Bool = true,
+        rotationDebiasing: Bool = false,
+        maximumBatchSize: Int = MLXDecisionModel.defaultMaximumBatchSize
+    ) -> MLXDecisionModel {
         let environment = ProcessInfo.processInfo.environment
         return MLXDecisionModel(
             modelID: environment["MLX_MODEL_ID"] ?? MLXDecisionModel.defaultModelID,
             directory: environment["MLX_MODEL_DIRECTORY"].map { URL(fileURLWithPath: $0) },
             rotationDebiasing: rotationDebiasing,
-            prefixCaching: prefixCaching
+            prefixCaching: prefixCaching,
+            maximumBatchSize: maximumBatchSize
         )
     }
 
@@ -220,6 +239,60 @@ import Testing
                 #expect(cached.diagnostics[index].cachedTokenCount > 0)
                 #expect(uncached.diagnostics[index].duration > .zero)
                 #expect(cached.diagnostics[index].duration > .zero)
+            }
+        }
+
+        @Test(arguments: [false, true])
+        func batchedAndSeparateResultsMatch(prefixCaching: Bool) async throws {
+            // More questions than one batch holds, a rotated choice, and two questions
+            // that are longer than one prefill step and share most of their instructions.
+            // Splitting at that shared prefix used to change Qwen3 0.6B probabilities by 0.0053.
+            let items = [
+                "a heavy winter coat", "a pair of sandals", "a red apple", "a slice of pizza",
+                "a hammer", "a bicycle", "a penguin", "a wool scarf", "a sailboat", "a candle",
+            ]
+            let long = Array(repeating: "Consider the customer's history carefully.", count: 120)
+                .joined(separator: " ")
+            let questions: [Question] =
+                items.map { .binary(instructions: "Item: \($0). Does the customer mention this item?") }
+                + [
+                    .choice(instructions: "Route this support ticket.", options: departments),
+                    .binary(instructions: long + " Is the customer asking for a refund?"),
+                    .binary(instructions: long + " Does the customer mention a delivery?"),
+                ]
+
+            let separate = try await DecisionSession(
+                model: makeModel(prefixCaching: false, rotationDebiasing: true, maximumBatchSize: 1),
+                state: .text(ticket)
+            ).decide(questions)
+            let batched = try await DecisionSession(
+                model: makeModel(prefixCaching: prefixCaching, rotationDebiasing: true, maximumBatchSize: 4),
+                state: .text(ticket)
+            ).decide(questions)
+
+            for index in questions.indices {
+                expectClose(
+                    probabilities(batched.answers[index]),
+                    probabilities(separate.answers[index]),
+                    tolerance: 1e-3,
+                    "question \(index)"
+                )
+            }
+            #expect(batched.usage.inputTokenCount == separate.usage.inputTokenCount)
+
+            // A long prompt must keep its prefill boundaries when other questions are removed
+            // or reordered, including when the session's prefix cache is enabled.
+            let model = makeModel(prefixCaching: prefixCaching, rotationDebiasing: true, maximumBatchSize: 4)
+            let reversed = try await DecisionSession(model: model, state: .text(ticket))
+                .decide(questions.reversed())
+            for index in questions.indices.suffix(2) {
+                let alone = try await DecisionSession(model: model, state: .text(ticket)).decide(questions[index])
+                expectClose(probabilities(batched.answers[index]), probabilities(alone), tolerance: 1e-6)
+                expectClose(
+                    probabilities(reversed.answers[questions.count - 1 - index]),
+                    probabilities(alone),
+                    tolerance: 1e-6
+                )
             }
         }
 
