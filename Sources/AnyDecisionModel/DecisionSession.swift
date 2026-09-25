@@ -200,6 +200,9 @@ extension DecisionSession {
         public var allowedAnswerMass: Double
 
         /// The number of prompt tokens read from the session's prefix cache.
+        ///
+        /// For Core AI models, this is the number of tokens that the engine reused from its cache,
+        /// which can include tokens that the prompt shares with the previous prompt after the prefix.
         public var cachedTokenCount: Int
 
         /// The number of prompt tokens evaluated for this answer.
@@ -215,6 +218,13 @@ extension DecisionSession {
         /// The estimate can change when other questions in the request change.
         /// The measured time includes evaluation of the model's output.
         /// It excludes model loading and filling the session's shared prefix cache.
+        ///
+        /// For Core AI models, this is the time to render and read the answer's prompts,
+        /// including option-order rotations,
+        /// plus the time that the engine reports for evaluating them.
+        /// It excludes model loading, filling the session's prefix cache,
+        /// and time spent waiting while the shared engine evaluates prompts for other sessions.
+        ///
         /// The value is zero if no duration was recorded.
         public var duration: Duration
 
