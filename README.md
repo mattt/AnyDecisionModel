@@ -2,9 +2,10 @@
 
 AnyDecisionModel is a Swift package for typed decisions:
 yes-or-no probabilities, choices among options, and scores on ordinal scales.
-It has two backends.
+It has three backends.
 `MLXDecisionModel` runs a small language model on Apple silicon
 and reads each decision from next-token probabilities in one forward pass, with no text generation.
+`CoreAIDecisionModel` does the same with a Core AI model on macOS 27 and iOS 27.
 `JevDecisionModel` calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
 or any server that implements the same API.
 
@@ -47,14 +48,15 @@ so your code can route the ticket to billing and also flag it for the technical 
 ## Requirements
 
 - Swift 6.2 or later.
-- macOS 14 or later, or iOS 17 or later.
+- macOS 26 or later, or iOS 26 or later.
   The core library and the Jev backend also build on Linux.
 - For MLX: Apple silicon and the Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`).
+- For Core AI: Xcode 27 to build, and macOS 27 or iOS 27 to run.
 
 ## Installation
 
-Add the package and enable the `MLX` trait if you want the local backend:
+Add the package and enable the `MLX` trait if you want the MLX backend:
 
 ```swift
 .package(
@@ -64,7 +66,9 @@ Add the package and enable the `MLX` trait if you want the local backend:
 )
 ```
 
-Without the trait, the package has no third-party dependencies at run time
+Enable the `CoreAI` trait for the Core AI backend,
+or enable both with `traits: ["MLX", "CoreAI"]`.
+Without these traits, the package has no third-party dependencies at run time
 and provides the core types and the Jev backend.
 
 ## Sessions and questions
@@ -209,6 +213,56 @@ the share of next-token probability that falls on the allowed answer tokens befo
 A low value means that the model wanted to reply with something else.
 This value is not a confidence value and not a probability of being correct.
 
+### Core AI
+
+`CoreAIDecisionModel` runs a Core AI language bundle through the `TypedDecisions` API of
+[coreai-kit](https://github.com/john-rocky/coreai-kit).
+Enable the `CoreAI` trait to use it.
+The package deploys to macOS 26 and iOS 26,
+but Core AI requires macOS 27 or iOS 27,
+so the model is available only on those versions:
+
+```swift
+if #available(macOS 27, iOS 27, *) {
+    let model = CoreAIDecisionModel(modelID: "qwen3-4b")
+    let session = DecisionSession(model: model, state: .text(ticket))
+    let urgent = try await session.probability(of: "Does this convey urgency?")
+}
+```
+
+Pass a chat model's identifier from the coreai-kit catalog with `modelID:`.
+The default is `qwen3-0.6b`, a 352 MB download.
+The kit's model store downloads and caches the bundle on first use;
+pass a `ModelStore` with `store:` to control where it goes.
+To load a bundle that is already on disk, pass its directory with `bundle:`.
+The model selects an engine that returns logits.
+To use the static-shape engine for a local bundle, pass `engineVariant: .staticShape`.
+If a file imports both `AnyDecisionModel` and `CoreAIKit`,
+write `AnyDecisionModel.DecisionError`, because both modules declare a `DecisionError`.
+
+The model uses the same prompt, answer labels, and readout as the MLX backend,
+with the same limits of 26 choice options and 10 score levels.
+It also supports `calibration`, `rotationDebiasing`, `closedThinkFallback`, and `systemPrompt`.
+It evaluates each prompt separately.
+
+Sessions share one engine for each model.
+The engine evaluates one prompt at a time and keeps the tokens of the last prompt in its cache.
+Prefix caching is on by default:
+each prompt reuses the cached tokens that it shares with the previous prompt.
+A session fills the cache with the prompt prefix for its state,
+which contains the system prompt and the state,
+so its questions evaluate only their own tokens.
+When sessions with different states alternate, the engine evaluates each state again.
+The Core AI engine computes in half precision,
+so cached and uncached probabilities are not identical.
+For seven probabilities about each of 16 support tickets with `qwen3-0.6b`,
+the median difference was 0.0007 and the largest was 0.013.
+With `prefixCaching: false`, every prompt is evaluated from the start,
+on an engine separate from the one that models with prefix caching use.
+Engines for models with recurrent layers cannot rewind into a prompt,
+so they reuse fewer cached tokens.
+`DecisionSession.Diagnostics` reports the reused tokens for each answer.
+
 ### Jev
 
 `JevDecisionModel` sends each batch to `POST /v1/systemone`.
@@ -316,8 +370,8 @@ Access requires permission to view the private repository.
 - Do not rely on typed output alone to resist injected instructions.
   See the [historical robustness results](https://github.com/mattt/AnyDecisionModel-Examples/blob/main/docs/historical-results.md)
   for the observed failures and fixture limitations.
-- The MLX backend limits choices to 26 options and scores to 10 levels.
-  These limits come from its single-token answer labels.
+- The MLX and Core AI backends limit choices to 26 options and scores to 10 levels.
+  These limits come from their single-token answer labels.
   Other models report their own limits.
 - Inference is not optimized beyond prefix caching.
   Further optimization waits until profiling justifies it.
@@ -341,10 +395,12 @@ The repository uses [mise](https://mise.jdx.dev/) tasks:
 | `mise run setup` | Resolve dependencies for the library. |
 | `mise run build` | Build the core library. |
 | `mise run build:mlx` | Build with the MLX trait. |
+| `mise run build:coreai` | Build with the CoreAI trait. |
 | `mise run build:ios` | Compile the core library for iOS. |
 | `mise run build:linux` | Build and test the core library in a Linux container. |
 | `mise run test` | Run the library tests without MLX. |
 | `mise run test:mlx` | Run the tests with MLX integration tests. Downloads Qwen3 4B. |
+| `mise run test:coreai` | Run the tests with Core AI integration tests. Downloads Qwen3 0.6B. |
 
 Setup is safe to repeat and does not download models or datasets.
 The hidden tasks in `mise.toml` select Xcode's Swift
@@ -356,6 +412,11 @@ and put the Metal compiler on `PATH`.
 SwiftPM compiles MLX's Metal shaders with the Swift Build engine,
 which is the default build system in Swift 6.4.
 MLX integration tests run only when `ENABLE_MLX_TESTS` is set.
+
+Core AI tasks use Xcode 27.
+Core AI integration tests run only when `ENABLE_COREAI_TESTS` is set, and only on macOS 27.
+Set `COREAI_MODEL_ID` to test another catalog model,
+or `COREAI_MODEL_BUNDLE` to test a local bundle.
 
 ## Related projects
 
