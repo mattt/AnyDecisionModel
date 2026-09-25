@@ -108,6 +108,37 @@ jobs:
         # Inference tests stay disabled unless ENABLE_MLX_TESTS is set.
         run: mise run _swift:mlx -- test --skip-build --traits MLX
 
+  build-coreai:
+    name: Build with Core AI on Xcode 27
+    # CoreAIKit needs the macOS 27 and iOS 27 SDKs.
+    # Inference tests download a model, so they run only locally.
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Identify Xcode build
+        id: xcode
+        run: echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-coreai-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-coreai-spm-
+
+      - name: Build with Core AI
+        run: swift build --build-tests --traits CoreAI
+
+      - name: Build for iOS with Core AI
+        # xcodebuild cannot enable package traits, so SwiftPM builds for the iOS SDK.
+        run: swift build --traits CoreAI --triple arm64-apple-ios26.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --build-path .build/ios
+
   build-ios:
     name: Build for iOS with Xcode 26.6
     runs-on: macos-26

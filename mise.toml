@@ -1,5 +1,6 @@
 # Swift comes from Xcode or the Command Line Tools, not from mise.
 # MLX tasks need Apple silicon and the Metal toolchain.
+# Core AI tasks need Xcode 27, and their integration tests need macOS 27.
 
 [tasks.setup]
 description = "Resolve Swift package dependencies for the library"
@@ -12,6 +13,10 @@ run = "mise run _swift -- build"
 [tasks."build:mlx"]
 description = "Build the library with the MLX trait"
 run = "mise run _swift:mlx -- build --traits MLX"
+
+[tasks."build:coreai"]
+description = "Build the library with the CoreAI trait"
+run = "mise run _swift -- build --traits CoreAI"
 
 [tasks."build:ios"]
 description = "Compile the core library for iOS"
@@ -29,6 +34,11 @@ run = "mise run _swift -- test"
 description = "Run the library tests with MLX integration tests (downloads Qwen3 4B)"
 env = { ENABLE_MLX_TESTS = "1" }
 run = "mise run _swift:mlx -- test --traits MLX"
+
+[tasks."test:coreai"]
+description = "Run the library tests with Core AI integration tests (downloads Qwen3 0.6B)"
+env = { ENABLE_COREAI_TESTS = "1" }
+run = "mise run _swift -- test --traits CoreAI"
 
 [tasks."_swift"]
 hide = true

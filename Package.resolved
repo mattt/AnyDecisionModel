@@ -1,6 +1,24 @@
 {
-  "originHash" : "015c5b4415c9d0f97f89239b888c07478e34bf09924f1b391fbb5b5ed416cee4",
+  "originHash" : "9992da6f1afb86f35e02570706095409140fd5416f188b8481b0bf99255ff7e2",
   "pins" : [
+    {
+      "identity" : "coreai-kit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/john-rocky/coreai-kit",
+      "state" : {
+        "revision" : "f32626037741222c17042cd1bc0301185c077e8e",
+        "version" : "0.7.3"
+      }
+    },
+    {
+      "identity" : "coreai-models",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/john-rocky/coreai-models",
+      "state" : {
+        "revision" : "3dc4ceb5ec9d2e488b9c995d53a415b9e22fe7ba",
+        "version" : "0.2.8-zoo"
+      }
+    },
     {
       "identity" : "eventsource",
       "kind" : "remoteSourceControl",
@@ -98,6 +116,15 @@
       "state" : {
         "revision" : "c21fdcde390313a6d98d8e33a346f2c3486c3ab0",
         "version" : "1.3.4"
+      }
+    },
+    {
+      "identity" : "xgrammar",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mlc-ai/xgrammar",
+      "state" : {
+        "revision" : "4d145cc13d878c751ebeed36af1c013074be76bc",
+        "version" : "0.2.2"
       }
     },
     {

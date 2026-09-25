@@ -6,8 +6,8 @@ import PackageDescription
 let package = Package(
     name: "AnyDecisionModel",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v17),
+        .macOS(.v26),
+        .iOS(.v26),
     ],
     products: [
         .library(
@@ -17,12 +17,14 @@ let package = Package(
     ],
     traits: [
         .trait(name: "MLX"),
+        .trait(name: "CoreAI"),
         .default(enabledTraits: []),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.4"),
         .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.0.0"),
+        .package(url: "https://github.com/john-rocky/coreai-kit", from: "0.7.3"),
     ],
     targets: [
         .target(
@@ -51,7 +53,12 @@ let package = Package(
                 .product(
                     name: "Tokenizers",
                     package: "swift-transformers",
-                    condition: .when(traits: ["MLX"])
+                    condition: .when(traits: ["MLX", "CoreAI"])
+                ),
+                .product(
+                    name: "CoreAIKit",
+                    package: "coreai-kit",
+                    condition: .when(traits: ["CoreAI"])
                 ),
             ]
         ),
