@@ -254,6 +254,21 @@ let model = JevDecisionModel(
 )
 ```
 
+[Ollaya](https://github.com/ollaya-dev/ollaya) runs local decision models
+and serves the System One API on port 11435.
+To use a local Ollaya server, pass its URL, a placeholder API key, and its model name:
+
+```swift
+let model = JevDecisionModel(
+    baseURL: URL(string: "http://127.0.0.1:11435")!,
+    apiKey: "local",
+    modelID: "laya"
+)
+```
+
+If the server sets `OLLAYA_API_KEY`, pass that value as the API key instead.
+Ollaya accepts at most 10 levels for each score question.
+
 The API key must not be empty, even when the server ignores it.
 
 ## Probabilities, calibration, and confidence
