@@ -288,7 +288,7 @@ struct JevDecisionModelTests {
         #expect(host.recorded.count == 1)
     }
 
-    @Test(arguments: [429, 529])
+    @Test(arguments: [429, 503, 529])
     func retriesRateLimitAndOverload(statusCode: Int) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: "{}", statusCode: statusCode, headers: ["Retry-After": "0"])
@@ -369,12 +369,12 @@ struct JevDecisionModelTests {
 
     @Test func retriesCustomStatusCode() async throws {
         let host = StubURLProtocol.Host()
-        host.enqueue(json: "{}", statusCode: 503)
+        host.enqueue(json: "{}", statusCode: 502)
         host.enqueue(json: okResponse)
         let policy = JevDecisionModel.RetryPolicy(
             strategy: .constant(duration: 0),
             maximumRetries: 1,
-            retryableStatusCodes: [503]
+            retryableStatusCodes: [502]
         )
         let session = DecisionSession(
             model: makeModel(host, retryPolicy: policy),

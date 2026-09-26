@@ -220,7 +220,7 @@ extension JevDecisionModel {
             timeout: TimeInterval? = nil,
             maximumInterval: TimeInterval? = 30,
             maximumRetries: Int? = 5,
-            retryableStatusCodes: Set<Int> = [429, 529]
+            retryableStatusCodes: Set<Int> = [429, 503, 529]
         ) {
             precondition(timeout.map { $0 > 0 && $0.isFinite } ?? true)
             precondition(maximumInterval.map { $0 > 0 && $0.isFinite } ?? true)
