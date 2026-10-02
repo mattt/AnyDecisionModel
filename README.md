@@ -154,6 +154,13 @@ It downloads and caches files from the Hugging Face Hub,
 or loads them from a local directory with `directory:`.
 Pass a `HubClient` with `hub:` to control downloads.
 
+The `MLX` trait requires mlx-swift-lm 3.31.
+mlx-swift-lm 3.32 changes APIs that `MLXDecisionModel` uses,
+and its MLX release makes quantized results depend on batch size
+([ml-explore/mlx#4613](https://github.com/ml-explore/mlx/issues/4613)).
+So an app can't use this trait together with a package that requires mlx-swift-lm 3.32,
+such as AnyLanguageModel 0.15.
+
 For each question, the model builds a prompt that contains the state, the question,
 and a short label for each allowed answer.
 It then runs one forward pass and reads the probability of every possible next token.
