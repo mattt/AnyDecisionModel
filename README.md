@@ -61,7 +61,7 @@ Add the package and enable the `MLX` trait if you want the MLX backend:
 ```swift
 .package(
     url: "https://github.com/mattt/AnyDecisionModel",
-    from: "0.3.0",
+    from: "0.4.0",
     traits: ["MLX"]
 )
 ```
