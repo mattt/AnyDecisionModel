@@ -34,7 +34,7 @@ struct RetryPolicyTests {
         #expect(Array(RetryPolicy.default) == [0.5, 1, 2, 4, 8])
         #expect(RetryPolicy.default.timeout == nil)
         #expect(RetryPolicy.default.maximumInterval == 30)
-        #expect(RetryPolicy.default.retryableStatusCodes == [429, 529])
+        #expect(RetryPolicy.default.retryableStatusCodes == [429, 503, 529])
     }
 
     @Test func timeoutCreatesDeadline() {

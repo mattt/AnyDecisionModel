@@ -273,7 +273,7 @@ The API key comes from `TYPESAFE_AI_API_KEY`, or from `TYPESAFE_API_KEY` if the 
 you can also pass it to the initializer.
 The key is sent only in the `Authorization` header
 and does not appear in descriptions or errors.
-The model retries HTTP 429 and 529 with bounded exponential backoff
+The model retries HTTP 429, 503, and 529 with bounded exponential backoff
 and honors `Retry-After`.
 The default policy retries five times, starting at 0.5 seconds and doubling
 each delay up to 30 seconds:
@@ -285,7 +285,7 @@ let model = JevDecisionModel(
         timeout: nil,
         maximumInterval: 30,
         maximumRetries: 5,
-        retryableStatusCodes: [429, 529]
+        retryableStatusCodes: [429, 503, 529]
     )
 )
 ```
@@ -307,6 +307,21 @@ let model = JevDecisionModel(
     modelID: "kev-latest"
 )
 ```
+
+[Ollaya](https://github.com/ollaya-dev/ollaya) runs local decision models
+and serves the System One API on port 11435.
+To use a local Ollaya server, pass its URL, a placeholder API key, and its model name:
+
+```swift
+let model = JevDecisionModel(
+    baseURL: URL(string: "http://127.0.0.1:11435")!,
+    apiKey: "local",
+    modelID: "laya"
+)
+```
+
+If the server sets `OLLAYA_API_KEY`, pass that value as the API key instead.
+Ollaya accepts at most 10 levels for each score question.
 
 The API key must not be empty, even when the server ignores it.
 
