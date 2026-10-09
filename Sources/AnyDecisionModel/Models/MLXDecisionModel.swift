@@ -172,7 +172,7 @@ import Foundation
             let hub = hub
             let directory = directory
             do {
-                return try await containerCache.container(for: cacheKey) {
+                return try await containerCache.value(for: cacheKey) {
                     // mlx-swift-lm 3 takes explicit downloader and tokenizer loaders.
                     // The macros back them with HubClient and AutoTokenizer.
                     if let directory {
@@ -206,56 +206,7 @@ import Foundation
 
     // MARK: - Shared weights
 
-    /// Loads each model once and shares the container across sessions.
-    private final class ModelContainerCache: Sendable {
-        private let entries = Locked<[String: Task<ModelContainer, Error>]>([:])
-        private let loaded = Locked<Set<String>>([])
-
-        func container(
-            for key: String,
-            loader: @escaping @Sendable () async throws -> ModelContainer
-        ) async throws -> ModelContainer {
-            let task = entries.withLock { entries in
-                if let task = entries[key] {
-                    return task
-                }
-                let task = Task { try await loader() }
-                entries[key] = task
-                return task
-            }
-
-            do {
-                // Waiting callers do not cancel the shared load.
-                let container = try await task.value
-                _ = loaded.withLock { $0.insert(key) }
-                try Task.checkCancellation()
-                return container
-            } catch {
-                if !(error is CancellationError) || task.isCancelled {
-                    entries.withLock { entries in
-                        if entries[key] == task { entries[key] = nil }
-                    }
-                }
-                throw error
-            }
-        }
-
-        func isLoaded(_ key: String) -> Bool {
-            loaded.withLock { $0.contains(key) }
-        }
-
-        func remove(_ key: String) {
-            entries.withLock { $0[key] = nil }
-            _ = loaded.withLock { $0.remove(key) }
-        }
-
-        func removeAll() {
-            entries.withLock { $0.removeAll() }
-            loaded.withLock { $0.removeAll() }
-        }
-    }
-
-    private let containerCache = ModelContainerCache()
+    private let containerCache = ModelCache<ModelContainer>()
 
     /// Lets one request at a time tokenize its prompts.
     private let tokenizationGate = AsyncMutex()
@@ -687,77 +638,6 @@ import Foundation
             let cache = model.newCache(parameters: nil)
             guard cache.allSatisfy({ type(of: $0) == KVCacheSimple.self }) else { return cache }
             return cache.map { _ in BatchKVCache() }
-        }
-    }
-
-    /// A key-value cache that holds a batch of sequences with a shared length.
-    ///
-    /// It masks attention with an explicit causal mask array.
-    /// The symbolic causal mask in MLX 0.31.1 is wrong for some shapes
-    /// in which the queries follow cached keys.
-    private final class BatchKVCache: KVCache {
-        private var keys: MLXArray?
-        private var values: MLXArray?
-        private(set) var offset = 0
-
-        var maxSize: Int? { nil }
-
-        func innerState() -> [MLXArray] {
-            [keys, values].compactMap { $0 }
-        }
-
-        func update(keys: MLXArray, values: MLXArray) -> (MLXArray, MLXArray) {
-            if let currentKeys = self.keys, let currentValues = self.values {
-                self.keys = concatenated([currentKeys, keys], axis: 2)
-                self.values = concatenated([currentValues, values], axis: 2)
-            } else {
-                self.keys = keys
-                self.values = values
-            }
-            offset += keys.dim(2)
-            return (self.keys!, self.values!)
-        }
-
-        var state: [MLXArray] {
-            get { innerState() }
-            set {
-                keys = newValue.first
-                values = newValue.last
-                offset = keys?.dim(2) ?? 0
-            }
-        }
-
-        var metaState: [String] {
-            get { [""] }
-            set {}
-        }
-
-        var isTrimmable: Bool { false }
-
-        func trim(_ n: Int) -> Int { 0 }
-
-        func makeMask(n: Int, windowSize: Int?, returnArray: Bool) -> MLXFast.ScaledDotProductAttentionMaskMode {
-            n == 1 ? .none : .array(createCausalMask(n: n, offset: offset, windowSize: windowSize))
-        }
-
-        func copy() -> any KVCache {
-            let copy = BatchKVCache()
-            copy.keys = keys
-            copy.values = values
-            copy.offset = offset
-            return copy
-        }
-
-        /// Returns a cache that holds `count` copies of this cache's one sequence.
-        ///
-        /// The copies are broadcast views,
-        /// so the keys and values are copied once, when the next update concatenates them.
-        func broadcast(to count: Int) -> BatchKVCache {
-            let copy = BatchKVCache()
-            copy.keys = keys.map { MLX.broadcast($0, to: [count] + $0.shape.dropFirst()) }
-            copy.values = values.map { MLX.broadcast($0, to: [count] + $0.shape.dropFirst()) }
-            copy.offset = offset
-            return copy
         }
     }
 #endif

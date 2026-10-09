@@ -1,0 +1,40 @@
+{
+ "revision": "3fb6bec9d8017565c767a9f3796d49f7d2bdba6c",
+ "config": {
+  "hidden_size": 32,
+  "width": 16,
+  "routing_layers": 2,
+  "layers": 2,
+  "heads": 4,
+  "feedforward": 32
+ },
+ "fields": [
+  {
+   "type_id": 0,
+   "question_span": [2, 5],
+   "option_spans": [
+    [6, 9],
+    [10, 12]
+   ]
+  },
+  {
+   "type_id": 1,
+   "question_span": [13, 16],
+   "option_spans": [
+    [17, 19],
+    [20, 23],
+    [24, 26]
+   ]
+  },
+  {
+   "type_id": 2,
+   "question_span": [27, 29],
+   "option_spans": [
+    [30, 32],
+    [33, 35],
+    [36, 38],
+    [38, 39]
+   ]
+  }
+ ]
+}

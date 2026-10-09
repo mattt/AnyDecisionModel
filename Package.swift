@@ -64,7 +64,8 @@ let package = Package(
         ),
         .testTarget(
             name: "AnyDecisionModelTests",
-            dependencies: ["AnyDecisionModel"]
+            dependencies: ["AnyDecisionModel"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

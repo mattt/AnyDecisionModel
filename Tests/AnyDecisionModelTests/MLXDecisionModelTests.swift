@@ -4,24 +4,10 @@ import Testing
 @testable import AnyDecisionModel
 
 #if MLX
-    /// MLX integration tests download and run a real model.
-    ///
-    /// Set `ENABLE_MLX_TESTS=1` to run them.
-    /// Set `MLX_MODEL_ID` to use another model,
-    /// or `MLX_MODEL_DIRECTORY` to load files from a local directory.
-    private let shouldRunMLXTests: Bool = {
-        #if arch(arm64)
-            guard ProcessInfo.processInfo.environment["ENABLE_MLX_TESTS"] != nil else { return false }
-            // SwiftPM puts MLX's Metal library in a resource bundle inside the test bundle.
-            // MLX searches registered bundles only, so register the test bundle.
-            _ = Bundle(for: TestBundleMarker.self).resourceURL
-            return true
-        #else
-            return false
-        #endif
-    }()
-
-    private final class TestBundleMarker: NSObject {}
+    // MLX integration tests download and run a real model.
+    // Set `ENABLE_MLX_TESTS=1` to run them.
+    // Set `MLX_MODEL_ID` to use another model,
+    // or `MLX_MODEL_DIRECTORY` to load files from a local directory.
 
     @Suite("MLXDecisionModel configuration")
     struct MLXDecisionModelConfigurationTests {

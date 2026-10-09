@@ -35,6 +35,11 @@ description = "Run the library tests with MLX integration tests (downloads Qwen3
 env = { ENABLE_MLX_TESTS = "1" }
 run = "mise run _swift:mlx -- test --traits MLX"
 
+[tasks."test:mlx:head"]
+description = "Run the library tests with MLX decision head integration tests (downloads Clef-flash 4-bit, 6.2 GB)"
+env = { ENABLE_MLX_HEAD_TESTS = "1" }
+run = "mise run _swift:mlx -- test --traits MLX"
+
 [tasks."test:coreai"]
 description = "Run the library tests with Core AI integration tests (downloads Qwen3 0.6B)"
 env = { ENABLE_COREAI_TESTS = "1" }
