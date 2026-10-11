@@ -2,10 +2,12 @@
 
 AnyDecisionModel is a Swift package for typed decisions:
 yes-or-no probabilities, choices among options, and scores on ordinal scales.
-It has three backends.
+It has four backends.
 `MLXDecisionModel` runs a small language model on Apple silicon
 and reads each decision from next-token probabilities in one forward pass, with no text generation.
 `CoreAIDecisionModel` does the same with a Core AI model on macOS 27 and iOS 27.
+`MLXHeadDecisionModel` runs a decision model that has its own trained head,
+such as Cloudflare's Clef, and reads each decision from the head.
 `JevDecisionModel` calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
 or any server that implements the same API.
 
@@ -220,6 +222,75 @@ the share of next-token probability that falls on the allowed answer tokens befo
 A low value means that the model wanted to reply with something else.
 This value is not a confidence value and not a probability of being correct.
 
+### MLX decision heads
+
+`MLXHeadDecisionModel` runs a decision model that has its own trained head.
+It uses the `MLX` trait.
+The backbone is a language model that mlx-swift-lm loads.
+The model runs the backbone to its final hidden states,
+and the head reads the hidden states at the positions that its prompt format marks
+and returns one score for each option.
+The model does not read next-token probabilities,
+so it has no limit on the number of choice options or score levels.
+
+Choose the head format when you create the model:
+
+```swift
+let model = MLXHeadDecisionModel(
+    modelID: "mlx-community/clef-flash-4bit",
+    head: .jointSchema
+)
+let session = DecisionSession(model: model, state: .text(ticket))
+let team = try await session.choice("Which team?", from: Department.self)
+```
+
+The only head format is `.jointSchema`,
+the joint schema head of Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef) models.
+The model directory must contain `joint_head.safetensors` and `joint_head_config.json`.
+[`mlx-community/clef-flash-4bit`](https://huggingface.co/mlx-community/clef-flash-4bit)
+is a 6.2 GB download, and its model card recommends a Mac with at least 16 GB of memory.
+Clef can read images and video, but this model reads text and JSON states only.
+Clef's prompt format sorts choice options by name,
+so the order of the options does not change the answer.
+
+Clef can decide several questions in one prompt,
+but then each answer depends on the other questions.
+`MLXHeadDecisionModel` gives each question its own prompt,
+so the position of a question in a batch does not change its answer.
+A prompt can have at most 16,384 tokens, the length that the head was trained with.
+A longer prompt throws `DecisionError.unsupportedQuestion` before inference;
+the state is never truncated.
+
+Prefix caching is on by default.
+Each session evaluates the system prompt and the state once,
+and each question evaluates only its own tokens.
+Set `prefixCaching: false` to evaluate each prompt from the start.
+The tests compare both paths with the reference implementation, `clef_mlx.py`,
+at a pinned revision of `mlx-community/clef-flash-4bit`.
+On an M4 Max, for nine questions,
+the largest difference in probability was 0.013 with prefix caching and 0.0069 without.
+
+MLX 0.31.1 has no fused attention kernel for Clef's attention head dimension of 256,
+so attention holds a score for every pair of positions.
+To bound that memory, the model evaluates inputs longer than 1,024 tokens in chunks.
+On an M4 Max, a question about a 15,000-token state raised peak memory
+2.2 GB above the loaded weights with prefix caching and 2.4 GB without,
+and took about 24 seconds.
+
+Each answer's `DecisionSession.Diagnostics` reports an allowed-answer mass of 1,
+because the head gives all of its probability to the options.
+
+The loader works around three limits of its dependencies.
+mlx-swift-lm 3.31 reads every `.safetensors` file in a model directory,
+so the backbone loads from a temporary directory of links that leaves out the head files.
+When the model evaluates a prompt in parts, after a cached prefix or in chunks,
+the attention layers use an explicit causal mask
+instead of the symbolic mask that MLX 0.31.1 applies incorrectly for some shapes.
+swift-transformers 1.3 does not register Clef's tokenizer class, `Qwen3_5Tokenizer`,
+so the tokenizer loads outside strict mode with the standard BPE tokenizer,
+and swift-transformers prints a warning.
+The token IDs match the reference implementation.
+
 ### Core AI
 
 `CoreAIDecisionModel` runs a Core AI language bundle through the `TypedDecisions` API of
@@ -392,9 +463,11 @@ Access requires permission to view the private repository.
 - Do not rely on typed output alone to resist injected instructions.
   See the [historical robustness results](https://github.com/mattt/AnyDecisionModel-Examples/blob/main/docs/historical-results.md)
   for the observed failures and fixture limitations.
-- The MLX and Core AI backends limit choices to 26 options and scores to 10 levels.
+- `MLXDecisionModel` and `CoreAIDecisionModel` limit choices to 26 options and scores to 10 levels.
   These limits come from their single-token answer labels.
   Other models report their own limits.
+- `MLXHeadDecisionModel` supports one head format, the joint schema head of Clef,
+  and reads text and JSON states only.
 - Inference is not optimized beyond prefix caching.
   Further optimization waits until profiling justifies it.
 
@@ -422,6 +495,7 @@ The repository uses [mise](https://mise.jdx.dev/) tasks:
 | `mise run build:linux` | Build and test the core library in a Linux container. |
 | `mise run test` | Run the library tests without MLX. |
 | `mise run test:mlx` | Run the tests with MLX integration tests. Downloads Qwen3 4B. |
+| `mise run test:mlx:head` | Run the tests with MLX decision head integration tests. Downloads Clef-flash 4-bit. |
 | `mise run test:coreai` | Run the tests with Core AI integration tests. Downloads Qwen3 0.6B. |
 
 Setup is safe to repeat and does not download models or datasets.
@@ -434,6 +508,11 @@ and put the Metal compiler on `PATH`.
 SwiftPM compiles MLX's Metal shaders with the Swift Build engine,
 which is the default build system in Swift 6.4.
 MLX integration tests run only when `ENABLE_MLX_TESTS` is set.
+MLX decision head integration tests run only when `ENABLE_MLX_HEAD_TESTS` is set.
+Set `MLX_HEAD_MODEL_DIRECTORY` to load Clef-flash 4-bit from a local directory.
+`scripts/joint-schema-fixtures.py` writes the reference fixtures for these tests.
+Run it with `uv run scripts/joint-schema-fixtures.py encoding`, `head`, or `model`;
+the `model` command downloads the model.
 
 Core AI tasks use Xcode 27.
 Core AI integration tests run only when `ENABLE_COREAI_TESTS` is set, and only on macOS 27.
