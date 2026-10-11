@@ -31,7 +31,7 @@ description = "Run the library tests without MLX"
 run = "mise run _swift -- test"
 
 [tasks."test:mlx"]
-description = "Run the library tests with MLX integration tests (downloads Qwen3 4B)"
+description = "Run the library tests with MLX integration tests (downloads Qwen3 4B, 2.3 GB)"
 env = { ENABLE_MLX_TESTS = "1" }
 run = "mise run _swift:mlx -- test --traits MLX"
 
