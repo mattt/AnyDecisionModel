@@ -4,6 +4,7 @@ import Testing
 @testable import AnyDecisionModel
 
 #if MLX
+    import HuggingFace
     import MLX
     import MLXLMCommon
 
@@ -180,6 +181,35 @@ import Testing
             )
             #expect(hub.cacheKey != local.cacheKey)
             #expect(!hub.isLoaded)
+        }
+
+        @Test func cacheKeysSeparateHubHosts() {
+            let first = MLXHeadDecisionModel(
+                modelID: "example/model",
+                hub: HubClient(host: URL(string: "https://first.example")!),
+                head: .jointSchema
+            )
+            let second = MLXHeadDecisionModel(
+                modelID: "example/model",
+                hub: HubClient(host: URL(string: "https://second.example")!),
+                head: .jointSchema
+            )
+            #expect(first.cacheKey != second.cacheKey)
+
+            let directory = URL(fileURLWithPath: "/tmp/model")
+            let localFirst = MLXHeadDecisionModel(
+                modelID: "example/model",
+                hub: first.hub,
+                directory: directory,
+                head: .jointSchema
+            )
+            let localSecond = MLXHeadDecisionModel(
+                modelID: "example/model",
+                hub: second.hub,
+                directory: directory,
+                head: .jointSchema
+            )
+            #expect(localFirst.cacheKey == localSecond.cacheKey)
         }
     }
 

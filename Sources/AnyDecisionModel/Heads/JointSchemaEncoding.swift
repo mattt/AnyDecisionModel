@@ -186,6 +186,7 @@ enum JointSchemaEncoding {
     private static func pythonNumber(_ value: Double) -> String {
         if value.isNaN { return "NaN" }
         if value.isInfinite { return value < 0 ? "-Infinity" : "Infinity" }
+        if value == 0, value.sign == .minus { return "-0.0" }
         if value == value.rounded(), abs(value) < 0x1p53 {
             return String(Int64(value))
         }

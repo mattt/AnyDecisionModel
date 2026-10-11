@@ -15,6 +15,30 @@ struct ModelCacheTests {
 
     private struct LoadError: Error {}
 
+    private actor SuspendedLoader {
+        private var started = false
+        private var startWaiter: CheckedContinuation<Void, Never>?
+        private var loadWaiter: CheckedContinuation<Void, Never>?
+
+        func load() async -> Int {
+            started = true
+            startWaiter?.resume()
+            startWaiter = nil
+            await withCheckedContinuation { loadWaiter = $0 }
+            return 1
+        }
+
+        func waitUntilStarted() async {
+            if started { return }
+            await withCheckedContinuation { startWaiter = $0 }
+        }
+
+        func finish() {
+            loadWaiter?.resume()
+            loadWaiter = nil
+        }
+    }
+
     @Test func concurrentCallersShareOneLoad() async throws {
         let cache = ModelCache<Int>()
         let counter = Counter()
@@ -48,6 +72,22 @@ struct ModelCacheTests {
         cache.removeAll()
         #expect(!cache.isLoaded("model"))
         #expect(try await cache.value(for: "model", loader: load) == 3)
+    }
+
+    @Test(arguments: [false, true])
+    func removedLoadDoesNotMarkKeyLoaded(removeAll: Bool) async throws {
+        let cache = ModelCache<Int>()
+        let loader = SuspendedLoader()
+        let first = Task { try await cache.value(for: "model") { await loader.load() } }
+        await loader.waitUntilStarted()
+
+        if removeAll { cache.removeAll() } else { cache.remove("model") }
+        #expect(!cache.isLoaded("model"))
+        await loader.finish()
+        #expect(try await first.value == 1)
+        #expect(!cache.isLoaded("model"))
+        #expect(try await cache.value(for: "model") { 2 } == 2)
+        #expect(cache.isLoaded("model"))
     }
 
     @Test func failedLoadsAreNotCached() async throws {

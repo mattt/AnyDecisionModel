@@ -125,7 +125,11 @@ import Foundation
         }
 
         var cacheKey: String {
-            "\(head.format.rawValue):" + (directory?.standardizedFileURL.path ?? modelID)
+            if let directory {
+                return "\(head.format.rawValue):\(directory.standardizedFileURL.path)"
+            }
+            let host = (hub?.host ?? HubClient().host).absoluteString
+            return "\(head.format.rawValue):\(host):\(modelID)"
         }
 
         // MARK: - Loading
