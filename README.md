@@ -2,17 +2,9 @@
 
 AnyDecisionModel is a Swift package for typed decisions:
 yes-or-no probabilities, choices among options, and scores on ordinal scales.
-It has four backends.
-`MLXDecisionModel` runs a small language model on Apple silicon
-and reads each decision from next-token probabilities in one forward pass, with no text generation.
-`CoreAIDecisionModel` does the same with a Core AI model on macOS 27 and iOS 27.
-`MLXHeadDecisionModel` runs a decision model that has its own trained head,
-such as Cloudflare's Clef, and reads each decision from the head.
-`JevDecisionModel` calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
-or any server that implements the same API.
-
-The API follows the model-and-session pattern of Apple's Foundation Models framework
-and of [AnyLanguageModel](https://github.com/huggingface/AnyLanguageModel).
+The API follows the model-and-session pattern of
+Apple's Foundation Models framework and
+[AnyLanguageModel](https://github.com/huggingface/AnyLanguageModel).
 
 ```swift
 import AnyDecisionModel
@@ -23,11 +15,7 @@ enum Department: String, Choosable {
 
 let ticket = "I was charged twice for my order, and now the app logs me out when I try to ask for a refund."
 
-var model = MLXDecisionModel(
-    modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit"
-)
-// Raw probabilities from language models are often overconfident; a calibration softens them.
-model.calibration = Calibration(temperature: 6.5, binaryBias: 1.0)
+let model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
 let session = DecisionSession(model: model, state: .text(ticket))
 
 let urgent = try await session.probability(of: "Does this convey urgency?")
@@ -39,52 +27,66 @@ let anger = try await session.score(
 ```
 
 `urgent` is a `Double`.
-`team` is a `Choice<Department>` with a value, a probability for each option, and a confidence value.
-`anger` is a `Score` with the expected level, a probability for each level, and a confidence value.
+`team` is a `Choice<Department>` with a value,
+a probability for each option, and a confidence value.
+`anger` is a `Score` with the expected level,
+a probability for each level, and a confidence value.
 
-The ticket describes a billing problem and a technical problem.
-With the [calibration](#probabilities-calibration-and-confidence) above,
-`team.distribution` is 0.75 for billing, 0.18 for technical, and 0.07 for sales,
-so your code can route the ticket to billing and also flag it for the technical team.
+Four backends are available:
+
+- [x] [MLX](#mlx) runs a small language model on Apple silicon
+  and reads each decision from next-token probabilities in one forward pass.
+- [x] [MLX decision heads](#mlx-decision-heads) run a model with a trained decision head,
+  such as Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef).
+- [x] [Core AI](#core-ai) does the same as MLX with a Core AI model on macOS 27 and iOS 27.
+- [x] [Jev](#jev) calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
+  or any server that implements the same API.
 
 ## Requirements
 
-- Swift 6.2 or later.
-- macOS 26 or later, or iOS 26 or later.
-  The core library and the Jev backend also build on Linux.
-- For MLX: Apple silicon and the Metal toolchain
-  (`xcodebuild -downloadComponent MetalToolchain`).
-- For Core AI: Xcode 27 to build, and macOS 27 or iOS 27 to run.
+- Swift 6.2+
+- macOS 26+ / iOS 26+ / Linux (core library and Jev backend only)
+- MLX: Apple silicon and the Metal toolchain
+  (`xcodebuild -downloadComponent MetalToolchain`)
+- Core AI: Xcode 27 to build, macOS 27 or iOS 27 to run
 
 ## Installation
 
-Add the package and enable the `MLX` trait if you want the MLX backend:
+Add the package to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/mattt/AnyDecisionModel", from: "0.4.0")
+]
+```
+
+Without traits, the package has no third-party dependencies
+and provides the core types and the Jev backend.
+Enable the `MLX` or `CoreAI` trait for the local backends:
 
 ```swift
 .package(
     url: "https://github.com/mattt/AnyDecisionModel",
     from: "0.4.0",
-    traits: ["MLX"]
+    traits: ["MLX", "CoreAI"]
 )
 ```
 
-Enable the `CoreAI` trait for the Core AI backend,
-or enable both with `traits: ["MLX", "CoreAI"]`.
-Without these traits, the package has no third-party dependencies at run time
-and provides the core types and the Jev backend.
+## Usage
 
-## Sessions and questions
+### Sessions and questions
 
 A `DecisionSession` holds one immutable state, which can be text or JSON.
 Every question is about that state, and questions are independent:
 an answer never becomes input to a later question.
 Call `prewarm()` to load the model and process the state before the first question.
 
+### Choices
+
 To get a choice back as one of your own types, conform an enumeration to `Choosable`.
-The protocol builds on `CaseIterable`, so the cases of the enumeration become the options,
-in declaration order.
-An enumeration with `String` raw values uses each raw value as the option name;
-other types implement `optionName`, which must be unique for each case.
+The cases become the options, in declaration order.
+`String` raw values become the option names;
+other types implement `optionName`.
 Implement `optionDescription` to tell the model when to select each option:
 
 ```swift
@@ -102,19 +104,17 @@ enum Department: String, Choosable {
 
 let team = try await session.choice("Which team?", from: Department.self)
 
-team.value                    // A Department, such as .billing.
-team.probability(of: .sales)  // The probability of one option.
-team.distribution             // Every option with its probability.
+team.value                    // A Department, such as .billing
+team.probability(of: .sales)  // The probability of one option
+team.distribution             // Every option with its probability
 ```
 
-The model sees the option names and descriptions, not the Swift cases.
-The session maps the answer back to a case,
-so `team.value` is a `Department` that you can use in an exhaustive `switch`.
 When the options are known only at run time,
-pass an array of `ChoiceOption` values to `choice(_:from:)` and get a `Choice<String>` back.
+pass an array of `ChoiceOption` values instead and get a `Choice<String>` back.
 
-The typed helpers ask one question at a time.
-To ask several questions together, pass an array to `decide(_:)`:
+### Batches
+
+To ask several questions in one call, pass an array to `decide(_:)`:
 
 ```swift
 let response = try await session.decide([
@@ -129,176 +129,73 @@ let response = try await session.decide([
     .score(instructions: "How frustrated?", levels: ["Calm", "Frustrated", "Very angry"]),
 ])
 
-response.modelID      // The model identifier.
-response.usage        // Input and output token counts.
-response.answers[1]   // The Answer to the choice question.
-response.diagnostics  // Local diagnostics, in the order of the questions.
+response.answers[1]   // The Answer to the choice question
+response.usage        // Input and output token counts
+response.diagnostics  // Local diagnostics, in the order of the questions
 ```
 
-Answers come back in the order of the questions.
-The position of a question in the batch does not change its result.
-To ask one question and get its `Answer`, pass a single `Question` to `decide(_:)`.
-Instructions, criteria, option descriptions, and score levels are strings.
-A state can be text or structured JSON (`JSONValue`).
-
-Binary answers have no confidence value;
-`Answer.binary(probability:)` holds the probability as a `Double`.
-Errors are `DecisionError` values; cancellation is reported as `CancellationError`.
+Answers come back in the order of the questions,
+and the position of a question in the batch does not change its result.
 
 ## Backends
 
 ### MLX
 
 `MLXDecisionModel` loads models through
-[mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) and
-[swift-huggingface](https://github.com/huggingface/swift-huggingface).
-It downloads and caches files from the Hugging Face Hub,
-or loads them from a local directory with `directory:`.
-Pass a `HubClient` with `hub:` to control downloads.
+[mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm)
+and downloads them from the Hugging Face Hub.
+Pass `directory:` to load a model from disk.
 
-The `MLX` trait requires mlx-swift-lm 3.31.
-mlx-swift-lm 3.32 changes APIs that `MLXDecisionModel` uses,
-and its MLX release makes quantized results depend on batch size
-([ml-explore/mlx#4613](https://github.com/ml-explore/mlx/issues/4613)).
-So an app can't use this trait together with a package that requires mlx-swift-lm 3.32,
-such as AnyLanguageModel 0.15.
+For each question, the model builds a prompt with the state, the question,
+and a one-token label for each allowed answer,
+then reads the probability of each label from a single forward pass.
+Binary questions use "yes" and "no",
+choices use A to Z, and scores use 0 to 9.
+So a choice can have at most 26 options and a score at most 10 levels.
 
-For each question, the model builds a prompt that contains the state, the question,
-and a short label for each allowed answer.
-It then runs one forward pass and reads the probability of every possible next token.
-The probability of an answer is the total probability of the tokens that spell its label,
-such as "yes", "Yes", and " yes",
-divided by the total for all the allowed answers.
-Binary questions use the labels "yes" and "no".
-Choice options are labeled A to Z, so a choice can have at most 26 options.
-Score levels are labeled 0 to 9, so a score can have at most 10 levels.
-The model checks every label's token mapping before it runs inference.
-The model passes `enable_thinking: false` to the chat template.
+Language models tend to prefer an option because of its position in the list.
+Set `rotationDebiasing: true` to ask each choice question once per rotation of the options
+and average the probabilities.
+A choice with _n_ options then costs _n_ prompt evaluations.
+
+Prefix caching is off by default.
+With `prefixCaching: true`, each session evaluates its state once
+and each question runs on a copy of that cache.
+Compare cached and uncached results for your model before enabling it.
 
 > [!NOTE]
-> For reasoning models whose templates ignore this flag,
-> set `closedThinkFallback: true`.
-> This appends `<think>\n\n</think>\n\n` when the tokenizer has both markers
-> and the decoded prompt tail does not contain `</think>`.
-> The option is off by default.
-> Enable it only for models with a thinking mode;
-> the default Qwen3 Instruct model retains these markers but has no thinking mode.
-
-Sessions share loaded weights.
-Prefix caching is off by default.
-mlx-swift 0.31.6 and earlier include MLX 0.31.1,
-whose Metal attention kernel applies the causal mask incorrectly
-for some split-prefill shapes.
-MLX 0.31.2 fixes this
-([ml-explore/mlx#3271](https://github.com/ml-explore/mlx/pull/3271)).
-With `prefixCaching: true`, each session keeps a cache for the state prefix,
-and each question runs on a copy of that cache.
-For models whose layers use plain key-value caches, such as Qwen3,
-the model passes an explicit causal mask array instead of the affected symbolic mask.
-Check cached and uncached results for your model and workload before enabling it.
-
-When `decide(_:)` receives several questions or a choice with rotation debiasing,
-the model evaluates their prompts in batches,
-with up to `maximumBatchSize` prompts in one forward pass.
-The default is 16; set it to 1 to evaluate each prompt separately.
-Batching applies to models whose layers use plain key-value caches;
-other models evaluate each prompt separately.
-Only the session's prefix cache shares evaluation across prompts.
-The model does not split a prompt at a prefix shared with other questions:
-that split can change probabilities through rounding.
-
-Language models tend to prefer an option because of its position in the list,
-for example the option labeled A.
-To reduce this position bias, set `rotationDebiasing: true`.
-The model then asks each choice question once for every rotation of the option order,
-so that each option appears in each position once,
-and averages the probabilities.
-A choice with _n_ options requires _n_ prompt evaluations.
-Several of these evaluations can share a batched forward pass.
-This setting is off by default.
-
-Each answer's `DecisionSession.Diagnostics` reports the allowed-answer mass:
-the share of next-token probability that falls on the allowed answer tokens before normalization.
-A low value means that the model wanted to reply with something else.
-This value is not a confidence value and not a probability of being correct.
+> The `MLX` trait pins mlx-swift-lm to 3.31.
+> An app can't use this trait together with a package that requires mlx-swift-lm 3.32,
+> such as AnyLanguageModel 0.15.
 
 ### MLX decision heads
 
-`MLXHeadDecisionModel` runs a decision model that has its own trained head.
+`MLXHeadDecisionModel` runs a model that has its own trained decision head.
+It reads each decision from the head rather than from next-token probabilities,
+so it has no limit on the number of options or levels.
 It uses the `MLX` trait.
-The backbone is a language model that mlx-swift-lm loads.
-The model runs the backbone to its final hidden states,
-and the head reads the hidden states at the positions that its prompt format marks
-and returns one score for each option.
-The model does not read next-token probabilities,
-so it has no limit on the number of choice options or score levels.
-
-Choose the head format when you create the model:
 
 ```swift
 let model = MLXHeadDecisionModel(
     modelID: "mlx-community/clef-flash-4bit",
     head: .jointSchema
 )
-let session = DecisionSession(model: model, state: .text(ticket))
-let team = try await session.choice("Which team?", from: Department.self)
 ```
 
 The only head format is `.jointSchema`,
 the joint schema head of Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef) models.
-The model directory must contain `joint_head.safetensors` and `joint_head_config.json`.
 [`mlx-community/clef-flash-4bit`](https://huggingface.co/mlx-community/clef-flash-4bit)
 is a 6.2 GB download, and its model card recommends a Mac with at least 16 GB of memory.
 Clef can read images and video, but this model reads text and JSON states only.
-Clef's prompt format sorts choice options by name,
-so the order of the options does not change the answer.
-
-Clef can decide several questions in one prompt,
-but then each answer depends on the other questions.
-`MLXHeadDecisionModel` gives each question its own prompt,
-so the position of a question in a batch does not change its answer.
-A prompt can have at most 16,384 tokens, the length that the head was trained with.
-A longer prompt throws `DecisionError.unsupportedQuestion` before inference;
-the state is never truncated.
-
+A prompt can have at most 16,384 tokens;
+a longer prompt throws `DecisionError.unsupportedQuestion` before inference.
 Prefix caching is on by default.
-Each session evaluates the system prompt and the state once,
-and each question evaluates only its own tokens.
-Set `prefixCaching: false` to evaluate each prompt from the start.
-The tests compare both paths with the reference implementation, `clef_mlx.py`,
-at a pinned revision of `mlx-community/clef-flash-4bit`.
-On an M4 Max, for nine questions,
-the largest difference in probability was 0.013 with prefix caching and 0.0069 without.
-
-MLX 0.31.1 has no fused attention kernel for Clef's attention head dimension of 256,
-so attention holds a score for every pair of positions.
-To bound that memory, the model evaluates inputs longer than 1,024 tokens in chunks.
-On an M4 Max, a question about a 15,000-token state raised peak memory
-2.2 GB above the loaded weights with prefix caching and 2.4 GB without,
-and took about 24 seconds.
-
-Each answer's `DecisionSession.Diagnostics` reports an allowed-answer mass of 1,
-because the head gives all of its probability to the options.
-
-The loader works around three limits of its dependencies.
-mlx-swift-lm 3.31 reads every `.safetensors` file in a model directory,
-so the backbone loads from a temporary directory of links that leaves out the head files.
-When the model evaluates a prompt in parts, after a cached prefix or in chunks,
-the attention layers use an explicit causal mask
-instead of the symbolic mask that MLX 0.31.1 applies incorrectly for some shapes.
-swift-transformers 1.3 does not register Clef's tokenizer class, `Qwen3_5Tokenizer`,
-so the tokenizer loads outside strict mode with the standard BPE tokenizer,
-and swift-transformers prints a warning.
-The token IDs match the reference implementation.
 
 ### Core AI
 
-`CoreAIDecisionModel` runs a Core AI language bundle through the `TypedDecisions` API of
+`CoreAIDecisionModel` runs a Core AI language bundle through
 [coreai-kit](https://github.com/john-rocky/coreai-kit).
-Enable the `CoreAI` trait to use it.
-The package deploys to macOS 26 and iOS 26,
-but Core AI requires macOS 27 or iOS 27,
-so the model is available only on those versions:
+It uses the `CoreAI` trait and is available only on macOS 27 and iOS 27:
 
 ```swift
 if #available(macOS 27, iOS 27, *) {
@@ -308,87 +205,29 @@ if #available(macOS 27, iOS 27, *) {
 }
 ```
 
-Pass a chat model's identifier from the coreai-kit catalog with `modelID:`.
-The default is `qwen3-0.6b`, a 352 MB download.
-The kit's model store downloads and caches the bundle on first use;
-pass a `ModelStore` with `store:` to control where it goes.
-To load a bundle that is already on disk, pass its directory with `bundle:`.
-The model selects an engine that returns logits.
-To use the static-shape engine for a local bundle, pass `engineVariant: .staticShape`.
+Pass a chat model's identifier from the coreai-kit catalog with `modelID:`;
+`qwen3-0.6b` is a 352 MB download.
+Pass `bundle:` to load a bundle that is already on disk.
+The model uses the same prompt, labels, limits, and options as the MLX backend.
+
 If a file imports both `AnyDecisionModel` and `CoreAIKit`,
-write `AnyDecisionModel.DecisionError`, because both modules declare a `DecisionError`.
-
-The model uses the same prompt, answer labels, and readout as the MLX backend,
-with the same limits of 26 choice options and 10 score levels.
-It also supports `calibration`, `rotationDebiasing`, `closedThinkFallback`, and `systemPrompt`.
-It evaluates each prompt separately.
-
-Sessions share one engine for each model.
-The engine evaluates one prompt at a time and keeps the tokens of the last prompt in its cache.
-Prefix caching is on by default:
-each prompt reuses the cached tokens that it shares with the previous prompt.
-A session fills the cache with the prompt prefix for its state,
-which contains the system prompt and the state,
-so its questions evaluate only their own tokens.
-When sessions with different states alternate, the engine evaluates each state again.
-The Core AI engine computes in half precision,
-so cached and uncached probabilities are not identical.
-For seven probabilities about each of 16 support tickets with `qwen3-0.6b`,
-the median difference was 0.0007 and the largest was 0.013.
-With `prefixCaching: false`, every prompt is evaluated from the start,
-on an engine separate from the one that models with prefix caching use.
-Engines for models with recurrent layers cannot rewind into a prompt,
-so they reuse fewer cached tokens.
-`DecisionSession.Diagnostics` reports the reused tokens for each answer.
+write `AnyDecisionModel.DecisionError`,
+because both modules declare a `DecisionError`.
 
 ### Jev
 
 `JevDecisionModel` sends each batch to `POST /v1/systemone`.
-It uses Foundation's `URLSession` and has no third-party dependencies.
-The Jev wire format is private to this model;
-binary questions go out under Jev's wire name, `noul`.
-The API key comes from `TYPESAFE_AI_API_KEY`, or from `TYPESAFE_API_KEY` if the first is not set;
-you can also pass it to the initializer.
-The key is sent only in the `Authorization` header
-and does not appear in descriptions or errors.
-The model retries HTTP 429, 503, and 529 with bounded exponential backoff
-and honors `Retry-After`.
-The default policy retries five times, starting at 0.5 seconds and doubling
-each delay up to 30 seconds:
-
-```swift
-let model = JevDecisionModel(
-    retryPolicy: .init(
-        strategy: .exponential(base: 0.5, multiplier: 2, jitter: 0),
-        timeout: nil,
-        maximumInterval: 30,
-        maximumRetries: 5,
-        retryableStatusCodes: [429, 503, 529]
-    )
-)
-```
-
-Use `.never` to disable retries.
-Set `timeout`, `maximumInterval`, or `maximumRetries` to `nil` to disable that limit.
+The API key comes from `TYPESAFE_AI_API_KEY`
+(or `TYPESAFE_API_KEY`), or you can pass it to the initializer.
+The model retries HTTP 429, 503, and 529 with exponential backoff
+and honors `Retry-After`;
+pass `retryPolicy: .never` to disable retries.
 Jev's probabilities and confidence values are returned unchanged.
-Jev accepts at most 255 options for each choice.
 
-The model works with any server that implements the System One API.
-[Kev](https://github.com/jaredpalmer/kev) is a family of small open-weights decision models
-that you can train and serve on your own machine.
-To use a local Kev server, pass its URL, a placeholder API key, and its model name:
-
-```swift
-let model = JevDecisionModel(
-    baseURL: URL(string: "http://127.0.0.1:8009")!,
-    apiKey: "local",
-    modelID: "kev-latest"
-)
-```
-
-[Ollaya](https://github.com/ollaya-dev/ollaya) runs local decision models
-and serves the System One API on port 11435.
-To use a local Ollaya server, pass its URL, a placeholder API key, and its model name:
+The model works with any server that implements the System One API,
+such as [Kev](https://github.com/jaredpalmer/kev)
+or [Ollaya](https://github.com/ollaya-dev/ollaya).
+Pass the server's URL, a placeholder API key, and its model name:
 
 ```swift
 let model = JevDecisionModel(
@@ -398,88 +237,46 @@ let model = JevDecisionModel(
 )
 ```
 
-If the server sets `OLLAYA_API_KEY`, pass that value as the API key instead.
-Ollaya accepts at most 10 levels for each score question.
-
 The API key must not be empty, even when the server ignores it.
 
-## Probabilities, calibration, and confidence
+## Calibration and confidence
 
-Local probabilities are raw by default.
 Raw probabilities from language models are often overconfident.
-A `Calibration` applies a temperature to the log-probabilities of every primitive
-and a bias to binary log-odds only:
+Local backends accept a `Calibration` that applies a temperature
+to every answer and a bias to binary answers:
 
 ```swift
-var model = MLXDecisionModel()
+var model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
 model.calibration = Calibration(temperature: 6.5, binaryBias: 1.0)
 ```
 
 Fit a calibration on data that is separate from the data you evaluate.
-The values above come from a historical fit and are an example,
-not a recommended setting for other tasks.
-See the companion's
-[calibration results](https://github.com/mattt/AnyDecisionModel-Examples/blob/main/docs/historical-results.md)
-for the datasets, sample sizes, and held-out measurements.
+The values above come from one historical fit and are an example,
+not a recommended setting.
 
-Local choice and score answers report confidence as the normalized entropy complement,
+Local choice and score answers report confidence as
 $1 - H(p) / \log n$,
-where $H(p) = -\sum_i p_i \log p_i$ is the [entropy](https://en.wikipedia.org/wiki/Entropy_(information_theory))
-of the answer probabilities
-and $n$ is the number of options.
-A question that has one option has confidence 1.
-This value measures how concentrated the distribution is.
-It is not the probability that the answer is correct.
-Jev computes its confidence remotely and does not publish the formula.
-Other System One servers use their own formulas,
+the normalized complement of the
+[entropy](https://en.wikipedia.org/wiki/Entropy_(information_theory))
+of the answer probabilities.
+This measures how concentrated the distribution is,
+not the probability that the answer is correct.
+The model can be confident and wrong,
+so measure the error rate on your own data before you choose a threshold.
+Jev and other System One servers compute confidence with their own formulas,
 so do not compare confidence values between backends.
 
-## Examples and evaluations
-
-The private companion repository,
-[AnyDecisionModel-Examples](https://github.com/mattt/AnyDecisionModel-Examples),
-contains the ticket-routing command-line example and evaluation tools.
-The example routes tickets with a typed choice
-and sends tickets below a confidence threshold to a person.
-It never switches to a cloud model on its own.
-
-See the companion's
-[evaluation methodology](https://github.com/mattt/AnyDecisionModel-Examples/blob/main/docs/evaluation.md)
-for commands, datasets, fixture provenance, and report formats.
-The [historical results](https://github.com/mattt/AnyDecisionModel-Examples/blob/main/docs/historical-results.md)
-preserve the measurements from 2026-09-19 with their conditions and limitations.
-Access requires permission to view the private repository.
+Each local answer also reports an allowed-answer mass in `DecisionSession.Diagnostics`:
+the share of next-token probability that fell on the answer labels before normalization.
+A low value means that the model wanted to reply with something else.
 
 ## Limitations
 
-- Wire compatibility with Jev is tested against fixtures, not against the live service.
-  Live Jev benchmarking and publication are deferred
-  until the applicable account terms are clarified
-  ([TypeSafe agreement](https://typesafe.ai/legal/mca)).
-  Wire compatibility says nothing about model quality.
-- Calibration was fitted on two tasks. Whether it transfers to other tasks is untested.
-- Local confidence measures concentration. The model can be confident and wrong.
-  Measure the error rate on your own data before you choose a confidence threshold.
+- Wire compatibility with Jev is tested against fixtures, not the live service.
+- Calibration was fitted on two tasks.
+  Whether it transfers to other tasks is untested.
 - Do not rely on typed output alone to resist injected instructions.
-  See the [historical robustness results](https://github.com/mattt/AnyDecisionModel-Examples/blob/main/docs/historical-results.md)
-  for the observed failures and fixture limitations.
-- `MLXDecisionModel` and `CoreAIDecisionModel` limit choices to 26 options and scores to 10 levels.
-  These limits come from their single-token answer labels.
-  Other models report their own limits.
-- `MLXHeadDecisionModel` supports one head format, the joint schema head of Clef,
-  and reads text and JSON states only.
 - Inference is not optimized beyond prefix caching.
-  Further optimization waits until profiling justifies it.
-
-## Not yet implemented
-
-- A native MLX port of Laya (ModernBERT encoder, type embeddings, transformer head,
-  option scorer, preprocessing, and calibration),
-  validated against reference fixtures from a pinned upstream checkpoint.
-  For background on this kind of model,
-  see [Jev's Architecture Unmasked](https://archerhume.com/posts/jevs-architecture-unmasked).
-- A DeBERTa zero-shot baseline, which waits for a native implementation.
-- A chess example. Unrestricted chess play needs more choice labels than A to Z.
 
 ## Development
 
@@ -487,37 +284,17 @@ The repository uses [mise](https://mise.jdx.dev/) tasks:
 
 | Task | Description |
 | --- | --- |
-| `mise run setup` | Resolve dependencies for the library. |
 | `mise run build` | Build the core library. |
 | `mise run build:mlx` | Build with the MLX trait. |
 | `mise run build:coreai` | Build with the CoreAI trait. |
-| `mise run build:ios` | Compile the core library for iOS. |
-| `mise run build:linux` | Build and test the core library in a Linux container. |
-| `mise run test` | Run the library tests without MLX. |
-| `mise run test:mlx` | Run the tests with MLX integration tests. Downloads Qwen3 4B. |
-| `mise run test:mlx:head` | Run the tests with MLX decision head integration tests. Downloads Clef-flash 4-bit. |
-| `mise run test:coreai` | Run the tests with Core AI integration tests. Downloads Qwen3 0.6B. |
+| `mise run test` | Run the tests without MLX. |
+| `mise run test:mlx` | Run the MLX integration tests. Downloads Qwen3 4B. |
+| `mise run test:mlx:head` | Run the MLX decision head integration tests. Downloads Clef-flash 4-bit. |
+| `mise run test:coreai` | Run the Core AI integration tests. Downloads Qwen3 0.6B. |
 
-Setup is safe to repeat and does not download models or datasets.
-The hidden tasks in `mise.toml` select Xcode's Swift
-on macOS and `swift` from `PATH` on other platforms.
-This keeps the compiler and selected Apple SDK compatible.
-
-MLX tasks use Xcode's Swift 6.4 or later
-and put the Metal compiler on `PATH`.
-SwiftPM compiles MLX's Metal shaders with the Swift Build engine,
-which is the default build system in Swift 6.4.
-MLX integration tests run only when `ENABLE_MLX_TESTS` is set.
-MLX decision head integration tests run only when `ENABLE_MLX_HEAD_TESTS` is set.
-Set `MLX_HEAD_MODEL_DIRECTORY` to load Clef-flash 4-bit from a local directory.
-`scripts/joint-schema-fixtures.py` writes the reference fixtures for these tests.
-Run it with `uv run scripts/joint-schema-fixtures.py encoding`, `head`, or `model`;
-the `model` command downloads the model.
-
-Core AI tasks use Xcode 27.
-Core AI integration tests run only when `ENABLE_COREAI_TESTS` is set, and only on macOS 27.
-Set `COREAI_MODEL_ID` to test another catalog model,
-or `COREAI_MODEL_BUNDLE` to test a local bundle.
+MLX tasks need Xcode's Swift 6.4 or later and the Metal compiler.
+Core AI tasks need Xcode 27, and their integration tests run only on macOS 27.
+Set `MLX_HEAD_MODEL_DIRECTORY` or `COREAI_MODEL_BUNDLE` to test a model from a local directory.
 
 ## Related projects
 
