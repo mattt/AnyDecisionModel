@@ -29,9 +29,6 @@ import Foundation
     /// let model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
     /// ```
     public struct MLXDecisionModel: DecisionModel {
-        /// The default model.
-        public static let defaultModelID = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
-
         /// The default system prompt for local decision models.
         public static let defaultSystemPrompt = TokenScoring.defaultSystemPrompt
 
@@ -114,7 +111,7 @@ import Foundation
         ///   - maximumBatchSize: The largest number of prompts evaluated together in one forward pass.
         ///     Defaults to ``defaultMaximumBatchSize``.
         public init(
-            modelID: String = MLXDecisionModel.defaultModelID,
+            modelID: String,
             hub: HubClient? = nil,
             directory: URL? = nil,
             calibration: Calibration? = nil,

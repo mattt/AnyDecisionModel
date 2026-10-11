@@ -35,7 +35,7 @@ import Testing
     struct CoreAIDecisionModelConfigurationTests {
         @available(macOS 27, iOS 27, *)
         @Test func defaults() {
-            let model = CoreAIDecisionModel()
+            let model = CoreAIDecisionModel(modelID: "qwen3-0.6b")
             #expect(model.modelID == "qwen3-0.6b")
             #expect(model.bundle == nil)
             #expect(model.store == nil)
@@ -51,18 +51,18 @@ import Testing
         @available(macOS 27, iOS 27, *)
         @Test(arguments: [false, true])
         func prefixCachingSelectsPrefixSharing(prefixCaching: Bool) {
-            let model = CoreAIDecisionModel(prefixCaching: prefixCaching)
+            let model = CoreAIDecisionModel(modelID: "qwen3-0.6b", prefixCaching: prefixCaching)
             #expect(model.decisionsConfiguration.sharePrefix == prefixCaching)
             #expect(model.decisionsConfiguration.engineVariant == .auto)
         }
 
         @available(macOS 27, iOS 27, *)
         @Test func cacheKeysSeparateEngines() {
-            let model = CoreAIDecisionModel()
+            let model = CoreAIDecisionModel(modelID: "qwen3-0.6b")
             var uncached = model
             uncached.prefixCaching = false
             #expect(model.cacheKey != uncached.cacheKey)
-            #expect(model.cacheKey != CoreAIDecisionModel(engineVariant: .staticShape).cacheKey)
+            #expect(model.cacheKey != CoreAIDecisionModel(modelID: "qwen3-0.6b", engineVariant: .staticShape).cacheKey)
             #expect(model.cacheKey != CoreAIDecisionModel(modelID: "qwen3-4b").cacheKey)
 
             // Calibration and prompt settings do not load another engine.
@@ -135,7 +135,8 @@ import Testing
         @Test func rejectsUnsupportedQuestionsBeforeLoading() async {
             let bundle = FileManager.default.temporaryDirectory
                 .appendingPathComponent("missing-\(UUID().uuidString)", isDirectory: true)
-            let session = DecisionSession(model: CoreAIDecisionModel(bundle: bundle), state: "state")
+            let model = CoreAIDecisionModel(modelID: "qwen3-0.6b", bundle: bundle)
+            let session = DecisionSession(model: model, state: "state")
             let options = (0 ..< 27).map { ChoiceOption("option \($0)") }
             await #expect {
                 _ = try await session.decide(.choice(instructions: "Pick one.", options: options))
@@ -157,7 +158,7 @@ import Testing
     private func makeModel(prefixCaching: Bool = true, rotationDebiasing: Bool = false) -> CoreAIDecisionModel {
         let environment = ProcessInfo.processInfo.environment
         return CoreAIDecisionModel(
-            modelID: environment["COREAI_MODEL_ID"] ?? CoreAIDecisionModel.defaultModelID,
+            modelID: environment["COREAI_MODEL_ID"] ?? "qwen3-0.6b",
             bundle: environment["COREAI_MODEL_BUNDLE"].map { URL(fileURLWithPath: $0) },
             rotationDebiasing: rotationDebiasing,
             prefixCaching: prefixCaching
