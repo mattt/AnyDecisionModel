@@ -56,7 +56,7 @@ Add the package to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/mattt/AnyDecisionModel", from: "0.4.0")
+    .package(url: "https://github.com/mattt/AnyDecisionModel", from: "0.5.0")
 ]
 ```
 
@@ -67,7 +67,7 @@ Enable the `MLX` or `CoreAI` trait for the local backends:
 ```swift
 .package(
     url: "https://github.com/mattt/AnyDecisionModel",
-    from: "0.4.0",
+    from: "0.5.0",
     traits: ["MLX", "CoreAI"]
 )
 ```
