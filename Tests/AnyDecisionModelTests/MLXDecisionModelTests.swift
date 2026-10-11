@@ -12,17 +12,17 @@ import Testing
     @Suite("MLXDecisionModel configuration")
     struct MLXDecisionModelConfigurationTests {
         @Test func prefixCachingIsDisabledByDefault() {
-            #expect(MLXDecisionModel().prefixCaching == false)
+            #expect(MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit").prefixCaching == false)
         }
 
         @Test func batchSizeHasADefaultAndIsAtLeast1() {
-            #expect(MLXDecisionModel().maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize)
-            #expect(MLXDecisionModel(maximumBatchSize: 0).maximumBatchSize == 1)
+            #expect(MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit").maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize)
+            #expect(MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit", maximumBatchSize: 0).maximumBatchSize == 1)
         }
 
         @Test(arguments: [(Int.min, 1), (-1, 1), (0, 1), (1, 1), (4, 4), (Int.max, Int.max)])
         func batchSizeIsClampedOnAssignment(value: Int, expected: Int) {
-            var model = MLXDecisionModel()
+            var model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
             model.maximumBatchSize = value
             #expect(model.maximumBatchSize == expected)
             model.maximumBatchSize = 8
@@ -37,7 +37,7 @@ import Testing
     ) -> MLXDecisionModel {
         let environment = ProcessInfo.processInfo.environment
         return MLXDecisionModel(
-            modelID: environment["MLX_MODEL_ID"] ?? MLXDecisionModel.defaultModelID,
+            modelID: environment["MLX_MODEL_ID"] ?? "mlx-community/Qwen3-4B-Instruct-2507-4bit",
             directory: environment["MLX_MODEL_DIRECTORY"].map { URL(fileURLWithPath: $0) },
             rotationDebiasing: rotationDebiasing,
             prefixCaching: prefixCaching,
@@ -191,14 +191,18 @@ import Testing
 
         @Test(arguments: [false, true])
         func closedThinkFallbackIsOptIn(prefixCaching: Bool) async throws {
-            // The default model retains thinking markers but its template omits the block.
+            // Qwen3 Instruct retains thinking markers but its template omits the block.
             let question = Question.binary(instructions: "Is the customer asking for a refund?")
             let original = try await DecisionSession(
-                model: MLXDecisionModel(prefixCaching: prefixCaching),
+                model: MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit", prefixCaching: prefixCaching),
                 state: .text(ticket)
             ).decide([question])
             let fallback = try await DecisionSession(
-                model: MLXDecisionModel(prefixCaching: prefixCaching, closedThinkFallback: true),
+                model: MLXDecisionModel(
+                    modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+                    prefixCaching: prefixCaching,
+                    closedThinkFallback: true
+                ),
                 state: .text(ticket)
             ).decide([question])
 

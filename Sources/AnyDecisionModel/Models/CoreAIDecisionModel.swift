@@ -32,9 +32,6 @@ import Foundation
     /// ```
     @available(macOS 27, iOS 27, *)
     public struct CoreAIDecisionModel: DecisionModel {
-        /// The default catalog model.
-        public static let defaultModelID = "qwen3-0.6b"
-
         /// The default system prompt for local decision models.
         public static let defaultSystemPrompt = TokenScoring.defaultSystemPrompt
 
@@ -113,7 +110,7 @@ import Foundation
         ///     Defaults to `false`.
         ///   - systemPrompt: The system prompt.
         public init(
-            modelID: String = CoreAIDecisionModel.defaultModelID,
+            modelID: String,
             bundle: URL? = nil,
             store: ModelStore? = nil,
             engineVariant: EngineVariant = .auto,
