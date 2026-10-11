@@ -9,20 +9,24 @@ import Testing
     // Set `MLX_MODEL_ID` to use another model,
     // or `MLX_MODEL_DIRECTORY` to load files from a local directory.
 
+    private let defaultModelID = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+
     @Suite("MLXDecisionModel configuration")
     struct MLXDecisionModelConfigurationTests {
         @Test func prefixCachingIsDisabledByDefault() {
-            #expect(MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit").prefixCaching == false)
+            #expect(MLXDecisionModel(modelID: defaultModelID).prefixCaching == false)
         }
 
         @Test func batchSizeHasADefaultAndIsAtLeast1() {
-            #expect(MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit").maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize)
-            #expect(MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit", maximumBatchSize: 0).maximumBatchSize == 1)
+            #expect(
+                MLXDecisionModel(modelID: defaultModelID).maximumBatchSize == MLXDecisionModel.defaultMaximumBatchSize
+            )
+            #expect(MLXDecisionModel(modelID: defaultModelID, maximumBatchSize: 0).maximumBatchSize == 1)
         }
 
         @Test(arguments: [(Int.min, 1), (-1, 1), (0, 1), (1, 1), (4, 4), (Int.max, Int.max)])
         func batchSizeIsClampedOnAssignment(value: Int, expected: Int) {
-            var model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
+            var model = MLXDecisionModel(modelID: defaultModelID)
             model.maximumBatchSize = value
             #expect(model.maximumBatchSize == expected)
             model.maximumBatchSize = 8
@@ -37,7 +41,7 @@ import Testing
     ) -> MLXDecisionModel {
         let environment = ProcessInfo.processInfo.environment
         return MLXDecisionModel(
-            modelID: environment["MLX_MODEL_ID"] ?? "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+            modelID: environment["MLX_MODEL_ID"] ?? defaultModelID,
             directory: environment["MLX_MODEL_DIRECTORY"].map { URL(fileURLWithPath: $0) },
             rotationDebiasing: rotationDebiasing,
             prefixCaching: prefixCaching,
@@ -194,12 +198,12 @@ import Testing
             // Qwen3 Instruct retains thinking markers but its template omits the block.
             let question = Question.binary(instructions: "Is the customer asking for a refund?")
             let original = try await DecisionSession(
-                model: MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit", prefixCaching: prefixCaching),
+                model: MLXDecisionModel(modelID: defaultModelID, prefixCaching: prefixCaching),
                 state: .text(ticket)
             ).decide([question])
             let fallback = try await DecisionSession(
                 model: MLXDecisionModel(
-                    modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+                    modelID: defaultModelID,
                     prefixCaching: prefixCaching,
                     closedThinkFallback: true
                 ),

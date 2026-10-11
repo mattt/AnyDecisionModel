@@ -135,7 +135,8 @@ import Testing
         @Test func rejectsUnsupportedQuestionsBeforeLoading() async {
             let bundle = FileManager.default.temporaryDirectory
                 .appendingPathComponent("missing-\(UUID().uuidString)", isDirectory: true)
-            let session = DecisionSession(model: CoreAIDecisionModel(modelID: "qwen3-0.6b", bundle: bundle), state: "state")
+            let model = CoreAIDecisionModel(modelID: "qwen3-0.6b", bundle: bundle)
+            let session = DecisionSession(model: model, state: "state")
             let options = (0 ..< 27).map { ChoiceOption("option \($0)") }
             await #expect {
                 _ = try await session.decide(.choice(instructions: "Pick one.", options: options))
