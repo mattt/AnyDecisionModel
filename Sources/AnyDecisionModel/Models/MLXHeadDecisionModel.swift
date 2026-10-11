@@ -314,7 +314,6 @@ import Foundation
     /// which serializes access across all sessions that share the container.
     private final class HeadPrefixCache: @unchecked Sendable {
         var state: DecisionState?
-        var tokens: [Int] = []
         var layers: [any KVCache]?
         var hidden: MLXArray?
     }
@@ -485,7 +484,6 @@ import Foundation
             let hidden = try hiddenStates(tokens, cache: cache, model: model)
             prefix.layers = cache
             prefix.hidden = hidden
-            prefix.tokens = tokens
             prefix.state = state
         }
 
