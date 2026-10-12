@@ -11,8 +11,8 @@ permissions:
 
 jobs:
   test-macos:
-    name: Swift ${{ matrix.swift }} on macOS 26 with Xcode ${{ matrix.xcode }}
-    runs-on: macos-26
+    name: Swift ${{ matrix.swift }} on macOS ${{ matrix.macos }} with Xcode ${{ matrix.xcode }}
+    runs-on: ${{ matrix.runner }}
     env:
       DEVELOPER_DIR: "/Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer"
     strategy:
@@ -21,8 +21,16 @@ jobs:
         include:
           - swift: "6.2"
             xcode: "26.0"
+            macos: "26"
+            runner: macos-26
           - swift: "6.3"
             xcode: "26.6"
+            macos: "26"
+            runner: macos-26
+          - swift: "6.4"
+            xcode: "27.0"
+            macos: "27"
+            runner: xcode-27
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -159,7 +167,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        swift: ["6.2.4", "6.3.3"]
+        swift: ["6.2.4", "6.3.3", "6.4.0"]
     timeout-minutes: 10
     steps:
       - name: Checkout code
