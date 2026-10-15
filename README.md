@@ -68,9 +68,13 @@ Enable the `MLX` or `CoreAI` trait for the local backends:
 .package(
     url: "https://github.com/mattt/AnyDecisionModel",
     from: "0.5.0",
-    traits: ["MLX", "CoreAI"]
+    traits: ["MLX"]
 )
 ```
+
+For now, an app can't enable both traits:
+the `MLX` trait requires swift-huggingface 1.0,
+and coreai-kit, which the `CoreAI` trait uses, requires an earlier version.
 
 ## Usage
 
@@ -166,7 +170,8 @@ Compare cached and uncached results for your model before enabling it.
 > [!NOTE]
 > The `MLX` trait pins mlx-swift-lm to 3.31.
 > An app can't use this trait together with a package that requires mlx-swift-lm 3.32,
-> such as AnyLanguageModel 0.15.
+> such as AnyLanguageModel 1.0 with its `MLX` trait.
+> The trait requires swift-huggingface 1.0 or later.
 
 ### MLX decision heads
 
