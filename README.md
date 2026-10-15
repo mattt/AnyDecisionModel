@@ -166,7 +166,7 @@ Compare cached and uncached results for your model before enabling it.
 > [!NOTE]
 > The `MLX` trait pins mlx-swift-lm to 3.31.
 > An app can't use this trait together with a package that requires mlx-swift-lm 3.32,
-> such as AnyLanguageModel 0.15.
+> such as AnyLanguageModel 1.0 with its `MLX` trait.
 
 ### MLX decision heads
 
