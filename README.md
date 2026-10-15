@@ -298,6 +298,9 @@ Set `MLX_HEAD_MODEL_DIRECTORY` or `COREAI_MODEL_BUNDLE` to test a model from a l
 
 ## Related projects
 
+- [AnyDecisionModel-Examples](https://github.com/mattt/AnyDecisionModel-Examples):
+  a ticket-routing command-line tool, Chess and Emoji Magnet macOS apps,
+  and evaluation tools for this package.
 - [Kev](https://github.com/jaredpalmer/kev):
   small Jev-like decision models with training code, evaluation data, and a System One server.
 - [SemIf](https://github.com/TheoLeeCJ/SemIf) and
