@@ -32,7 +32,7 @@ a probability for each option, and a confidence value.
 `anger` is a `Score` with the expected level,
 a probability for each level, and a confidence value.
 
-Four backends are available:
+Five backends are available:
 
 - [x] [MLX](#mlx) runs a small language model on Apple silicon
   and reads each decision from next-token probabilities in one forward pass.
@@ -41,11 +41,15 @@ Four backends are available:
 - [x] [Core AI](#core-ai) does the same as MLX with a Core AI model on macOS 27 and iOS 27.
 - [x] [Jev](#jev) calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
   or any server that implements the same API.
+- [x] [Ollama](#ollama) calls a System One model in
+  [Ollama](https://docs.ollama.com/capabilities/decision),
+  locally or in Ollama's cloud.
 
 ## Requirements
 
 - Swift 6.2+
-- macOS 26+ / iOS 26+ / Linux (core library and Jev backend only)
+- macOS 26+ / iOS 26+ / Linux (core library, Jev, and Ollama backends only)
+- Ollama: Ollama v0.35.0 or later (v0.40.5 or later for cloud models)
 - MLX: Apple silicon and the Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`)
 - Core AI: Xcode 27 to build, macOS 27 or iOS 27 to run
@@ -61,7 +65,7 @@ dependencies: [
 ```
 
 Without traits, the package has no third-party dependencies
-and provides the core types and the Jev backend.
+and provides the core types and the Jev and Ollama backends.
 Enable the `MLX` or `CoreAI` trait for the local backends:
 
 ```swift
@@ -239,6 +243,25 @@ let model = JevDecisionModel(
 
 The API key must not be empty, even when the server ignores it.
 
+### Ollama
+
+`OllamaDecisionModel` sends each batch to `POST /v1/systemone` on an Ollama server.
+Pass the name of a decision model, such as
+[Nimble](https://ollama.com/library/nimble):
+
+```swift
+let model = OllamaDecisionModel(modelID: "nimble")
+let session = DecisionSession(model: model, state: .text(ticket))
+let urgent = try await session.probability(of: "Does this convey urgency?")
+```
+
+Local requests need no API key.
+For Ollama's cloud, set `OLLAMA_API_KEY` (or pass `apiKey:`)
+and point `baseURL:` at `https://ollama.com`,
+or add `:cloud` to the model name to go through a local server.
+Pass `keepAlive:` to control how long the model stays loaded, in seconds.
+Ollama's probabilities and confidence values are returned unchanged.
+
 ## Calibration and confidence
 
 Raw probabilities from language models are often overconfident.
@@ -272,7 +295,7 @@ A low value means that the model wanted to reply with something else.
 
 ## Limitations
 
-- Wire compatibility with Jev is tested against fixtures, not the live service.
+- Wire compatibility with Jev and Ollama is tested against fixtures, not live services.
 - Calibration was fitted on two tasks.
   Whether it transfers to other tasks is untested.
 - Do not rely on typed output alone to resist injected instructions.

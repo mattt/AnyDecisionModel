@@ -95,10 +95,11 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
         {
             // Jev keys questions and answers by identifier. Use each question's position.
             let keys = questions.indices.map(String.init)
-            let request = JevRequest(
+            let request = SystemOneRequest(
                 model: model.modelID,
                 state: state,
-                questions: Dictionary(uniqueKeysWithValues: zip(keys, questions.map(JevQuestion.init)))
+                questions: Dictionary(uniqueKeysWithValues: zip(keys, questions.map(SystemOneQuestion.init))),
+                keepAlive: nil
             )
             let response = try await model.send(request)
             let answers = try keys.map { key in
@@ -121,7 +122,7 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     /// Sends a request and returns the decoded response.
     ///
     /// Eligible HTTP failures are retried according to ``retryPolicy``.
-    private func send(_ request: JevRequest) async throws -> JevResponse {
+    private func send(_ request: SystemOneRequest) async throws -> SystemOneResponse {
         guard let apiKey = tokenProvider(), !apiKey.isEmpty else {
             throw DecisionError.missingCredentials
         }
@@ -136,7 +137,7 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
             do {
                 let (data, _) = try await urlSession.send(.post, url: url, headers: headers, body: body)
                 do {
-                    return try JSONDecoder().decode(JevResponse.self, from: data)
+                    return try JSONDecoder().decode(SystemOneResponse.self, from: data)
                 } catch {
                     throw DecisionError.invalidResponse(String(describing: error))
                 }
@@ -344,160 +345,6 @@ extension JevDecisionModel {
                 return date.timeIntervalSince(now)
             }
             return nil
-        }
-    }
-}
-
-// MARK: - Wire format
-
-/// A batch decision request in the Jev `/v1/systemone` wire format.
-private struct JevRequest: Encodable {
-    /// The model identifier.
-    var model: String
-
-    /// The state that every question is about.
-    var state: DecisionState
-
-    /// The questions, keyed by question identifier.
-    var questions: [String: JevQuestion]
-}
-
-/// A question in the Jev wire format.
-private struct JevQuestion: Encodable {
-    var question: Question
-
-    init(_ question: Question) {
-        self.question = question
-    }
-
-    /// The Jev wire name for the question type.
-    private var typeName: String {
-        switch question {
-        case .binary: return "noul"
-        case .choice: return "choice"
-        case .score: return "score"
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case type
-        case instructions
-        case criteria
-    }
-
-    private enum BinaryCriteriaKeys: String, CodingKey {
-        case whenTrue = "true"
-        case whenFalse = "false"
-    }
-
-    func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(typeName, forKey: .type)
-
-        switch question {
-        case .binary(let instructions, let criteria):
-            try container.encode(instructions, forKey: .instructions)
-            if let criteria {
-                var nested = container.nestedContainer(keyedBy: BinaryCriteriaKeys.self, forKey: .criteria)
-                try nested.encode(criteria.whenTrue, forKey: .whenTrue)
-                try nested.encode(criteria.whenFalse, forKey: .whenFalse)
-            }
-        case .choice(let instructions, let options):
-            try container.encode(instructions, forKey: .instructions)
-            var criteria: [String: String?] = [:]
-            for option in options {
-                criteria[option.name] = .some(option.description)
-            }
-            try container.encode(criteria, forKey: .criteria)
-        case .score(let instructions, let levels):
-            try container.encode(instructions, forKey: .instructions)
-            try container.encode(levels, forKey: .criteria)
-        }
-    }
-}
-
-/// A batch decision response in the Jev `/v1/systemone` wire format.
-private struct JevResponse: Decodable {
-    /// The identifier of the model that answered.
-    var model: String
-
-    /// The answers, keyed by question identifier.
-    var answers: [String: JevAnswer]
-
-    /// Token usage for the request.
-    var usage: Usage?
-
-    struct Usage: Decodable {
-        var inputTokenCount: Int
-        var outputTokenCount: Int
-
-        private enum CodingKeys: String, CodingKey {
-            case inputTokenCount = "input_tokens"
-            case outputTokenCount = "output_tokens"
-        }
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            inputTokenCount = try container.decodeIfPresent(Int.self, forKey: .inputTokenCount) ?? 0
-            outputTokenCount = try container.decodeIfPresent(Int.self, forKey: .outputTokenCount) ?? 0
-        }
-    }
-}
-
-/// An answer in the Jev wire format.
-private struct JevAnswer: Decodable {
-    var answer: Answer
-
-    private enum CodingKeys: String, CodingKey {
-        case type
-        case noul
-        case choice
-        case score
-        case probabilities
-        case legend
-        case confidence
-    }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let type = try container.decodeIfPresent(String.self, forKey: .type)
-
-        if type == "noul" || (type == nil && container.contains(.noul)) {
-            let probability = try container.decode(Double.self, forKey: .noul)
-            answer = .binary(probability: probability)
-        } else if type == "choice" || (type == nil && container.contains(.choice)) {
-            answer = .choice(
-                name: try container.decode(String.self, forKey: .choice),
-                probabilities: try container.decode([String: Double].self, forKey: .probabilities),
-                confidence: try container.decode(Double.self, forKey: .confidence)
-            )
-        } else if type == "score" || (type == nil && container.contains(.score)) {
-            let keyed = try container.decode([String: Double].self, forKey: .probabilities)
-            var probabilities: [Double] = []
-            for index in 0 ..< keyed.count {
-                guard let value = keyed[String(index)] else {
-                    throw DecodingError.dataCorruptedError(
-                        forKey: .probabilities,
-                        in: container,
-                        debugDescription: "Score probabilities must be keyed by level index from 0."
-                    )
-                }
-                probabilities.append(value)
-            }
-            answer = .score(
-                value: try container.decode(Double.self, forKey: .score),
-                probabilities: probabilities,
-                // The legend is informational, so ignore one that is absent or not a list of strings.
-                legend: try? container.decode([String].self, forKey: .legend),
-                confidence: try container.decode(Double.self, forKey: .confidence)
-            )
-        } else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "The answer has no \"noul\", \"choice\", or \"score\" field."
-                )
-            )
         }
     }
 }
