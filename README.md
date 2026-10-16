@@ -32,13 +32,14 @@ a probability for each option, and a confidence value.
 `anger` is a `Score` with the expected level,
 a probability for each level, and a confidence value.
 
-Five backends are available:
+Six backends are available:
 
 - [x] [MLX](#mlx) runs a small language model on Apple silicon
   and reads each decision from next-token probabilities in one forward pass.
 - [x] [MLX decision heads](#mlx-decision-heads) run a model with a trained decision head,
   such as Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef).
 - [x] [Core AI](#core-ai) does the same as MLX with a Core AI model on macOS 27 and iOS 27.
+- [x] [llama.cpp](#llamacpp) does the same as MLX with a GGUF model through llama.cpp.
 - [x] [Jev](#jev) calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
   or any server that implements the same API.
 - [x] [Ollama](#ollama) calls a System One model in
@@ -53,6 +54,7 @@ Five backends are available:
 - MLX: Apple silicon and the Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`)
 - Core AI: Xcode 27 to build, macOS 27 or iOS 27 to run
+- llama.cpp: a GGUF model file with a chat template that llama.cpp supports
 
 ## Installation
 
@@ -66,13 +68,13 @@ dependencies: [
 
 Without traits, the package has no third-party dependencies
 and provides the core types and the Jev and Ollama backends.
-Enable the `MLX` or `CoreAI` trait for the local backends:
+Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
 ```swift
 .package(
     url: "https://github.com/mattt/AnyDecisionModel",
     from: "0.5.0",
-    traits: ["MLX", "CoreAI"]
+    traits: ["MLX", "CoreAI", "Llama"]
 )
 ```
 
@@ -218,6 +220,31 @@ If a file imports both `AnyDecisionModel` and `CoreAIKit`,
 write `AnyDecisionModel.DecisionError`,
 because both modules declare a `DecisionError`.
 
+### llama.cpp
+
+`LlamaDecisionModel` runs a GGUF model through
+[llama.swift](https://github.com/mattt/llama.swift),
+which packages llama.cpp for Swift.
+It uses the `Llama` trait:
+
+```swift
+let model = LlamaDecisionModel(modelPath: "/path/to/model.gguf")
+let session = DecisionSession(model: model, state: .text(ticket))
+let urgent = try await session.probability(of: "Does this convey urgency?")
+```
+
+Pass the path of a GGUF file with `modelPath:`.
+The prompt uses the chat template embedded in the GGUF file,
+applied by `llama_chat_apply_template`,
+which supports a predefined list of templates rather than full Jinja.
+The model uses the same prompt, labels, limits, and options as the MLX backend,
+except prefix caching:
+each session clears its context between questions,
+so the state is evaluated again for every question.
+Pass `gpuLayers: 0` for CPU-only execution,
+and `closedThinkFallback: true` for reasoning models
+whose templates open a thinking block.
+
 ### Jev
 
 `JevDecisionModel` sends each batch to `POST /v1/systemone`.
@@ -310,10 +337,12 @@ The repository uses [mise](https://mise.jdx.dev/) tasks:
 | `mise run build` | Build the core library. |
 | `mise run build:mlx` | Build with the MLX trait. |
 | `mise run build:coreai` | Build with the CoreAI trait. |
+| `mise run build:llama` | Build with the Llama trait. |
 | `mise run test` | Run the tests without MLX. |
 | `mise run test:mlx` | Run the MLX integration tests. Downloads Qwen3 4B. |
 | `mise run test:mlx:head` | Run the MLX decision head integration tests. Downloads Clef-flash 4-bit. |
 | `mise run test:coreai` | Run the Core AI integration tests. Downloads Qwen3 0.6B. |
+| `mise run test:llama` | Run the tests with the Llama trait. Set `LLAMA_MODEL_PATH` to a GGUF file for inference tests. |
 
 MLX tasks need Xcode's Swift 6.4 or later and the Metal compiler.
 Core AI tasks need Xcode 27, and their integration tests run only on macOS 27.

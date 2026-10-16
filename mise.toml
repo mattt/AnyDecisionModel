@@ -18,6 +18,10 @@ run = "mise run _swift:mlx -- build --traits MLX"
 description = "Build the library with the CoreAI trait"
 run = "mise run _swift -- build --traits CoreAI"
 
+[tasks."build:llama"]
+description = "Build the library with the Llama trait"
+run = "mise run _swift -- build --traits Llama"
+
 [tasks."build:ios"]
 description = "Compile the core library for iOS"
 run = "xcodebuild build -scheme AnyDecisionModel -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO -quiet"
@@ -44,6 +48,10 @@ run = "mise run _swift:mlx -- test --traits MLX"
 description = "Run the library tests with Core AI integration tests (downloads Qwen3 0.6B)"
 env = { ENABLE_COREAI_TESTS = "1" }
 run = "mise run _swift -- test --traits CoreAI"
+
+[tasks."test:llama"]
+description = "Run the library tests with the Llama trait (set LLAMA_MODEL_PATH to a GGUF file for inference tests)"
+run = "mise run _swift -- test --traits Llama"
 
 [tasks."_swift"]
 hide = true
