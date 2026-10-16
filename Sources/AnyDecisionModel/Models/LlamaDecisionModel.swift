@@ -218,7 +218,7 @@ import Foundation
         }
 
         var cacheKey: String {
-            URL(fileURLWithPath: modelPath).standardizedFileURL.path
+            "\(URL(fileURLWithPath: modelPath).standardizedFileURL.path)|gpuLayers=\(gpuLayers)"
         }
 
         func loadModel() async throws -> LlamaModel {
@@ -332,6 +332,13 @@ import Foundation
         let model: LlamaDecisionModel
         private let mutex = AsyncMutex()
 
+        /// The loaded weights, retained for the executor's lifetime.
+        ///
+        /// The context is created from these weights,
+        /// so they must stay loaded even if the shared cache drops its entry.
+        /// `deinit` frees the context before stored properties release the weights.
+        private let retainedModel = Locked<LlamaModel?>(nil)
+
         // The context and batch are used only while `mutex` is held.
         private var context: OpaquePointer?
         private var batch: llama_batch?
@@ -350,7 +357,7 @@ import Foundation
         }
 
         func prewarm(for state: DecisionState) async throws {
-            let loaded = try await model.loadModel()
+            let loaded = try await retainedLoadedModel()
             try await mutex.withLock {
                 _ = try self.ensureContext(for: loaded)
             }
@@ -359,9 +366,24 @@ import Foundation
         func decide(_ questions: [Question], about state: DecisionState) async throws
             -> DecisionSession.Response
         {
-            let loaded = try await model.loadModel()
+            let loaded = try await retainedLoadedModel()
             return try await mutex.withLock {
                 try self.decide(questions, about: state, loaded: loaded)
+            }
+        }
+
+        /// Returns the weights this executor retains, loading them on first use.
+        private func retainedLoadedModel() async throws -> LlamaModel {
+            if let loaded = retainedModel.withLock({ $0 }) {
+                return loaded
+            }
+            let loaded = try await model.loadModel()
+            return retainedModel.withLock { state in
+                if let existing = state {
+                    return existing
+                }
+                state = loaded
+                return loaded
             }
         }
 
@@ -370,7 +392,6 @@ import Foundation
             about state: DecisionState,
             loaded: LlamaModel
         ) throws -> DecisionSession.Response {
-            let start = ContinuousClock.now
             let context = try ensureContext(for: loaded)
             let vocab = loaded.vocab
             let vocabSize = Int(llama_vocab_n_tokens(vocab))
@@ -396,6 +417,7 @@ import Foundation
             var inputTokenCount = 0
 
             for (index, plan) in plans.enumerated() {
+                let questionStart = ContinuousClock.now
                 let isBinary = if case .binary = plan.question { true } else { false }
                 var totals = [Double](repeating: 0, count: plan.tokenMap.count)
                 var mass = 0.0
@@ -443,7 +465,7 @@ import Foundation
                         allowedAnswerMass: mass,
                         cachedTokenCount: 0,
                         evaluatedTokenCount: evaluatedTokenCount,
-                        duration: start.duration(to: .now) / max(1, plans.count)
+                        duration: questionStart.duration(to: .now)
                     )
                 )
             }

@@ -19,6 +19,13 @@ import Testing
             #expect(cpuOnly.gpuLayers == 0)
         }
 
+        @Test func cacheKeyIncludesGPULayers() {
+            let cpu = LlamaDecisionModel(modelPath: "/path/to/model.gguf", gpuLayers: 0)
+            let gpu = LlamaDecisionModel(modelPath: "/path/to/model.gguf", gpuLayers: -1)
+            #expect(cpu.cacheKey != gpu.cacheKey)
+            #expect(cpu.cacheKey == LlamaDecisionModel(modelPath: "/path/to/model.gguf", gpuLayers: 0).cacheKey)
+        }
+
         @Test func missingModelFile() async throws {
             let model = LlamaDecisionModel(modelPath: "/nonexistent/model.gguf")
             let session = DecisionSession(model: model, state: "ticket")
@@ -89,6 +96,55 @@ import Testing
             }
             #expect(scoreProbabilities.count == 3)
             #expect((0 ... 2).contains(value))
+        }
+
+        @Test func sessionSurvivesCacheRemoval() async throws {
+            let model = self.model
+            let session = DecisionSession(
+                model: model,
+                state: .text("I was charged twice for my subscription this month.")
+            )
+
+            _ = try await session.probability(of: "Is the customer requesting a refund?")
+            #expect(model.isLoaded)
+
+            model.removeFromCache()
+            #expect(!model.isLoaded)
+
+            // The session retains its weights,
+            // so it keeps answering without loading them into the cache again.
+            let probability = try await session.probability(of: "Is the customer requesting a refund?")
+            #expect((0 ... 1).contains(probability))
+            #expect(!model.isLoaded)
+        }
+
+        @Test func diagnosticsDurationIsPerQuestion() async throws {
+            var model = self.model
+            model.rotationDebiasing = true
+            let session = DecisionSession(
+                model: model,
+                state: .text("I was charged twice for my subscription this month.")
+            )
+
+            let response = try await session.decide([
+                .choice(
+                    instructions: "Which label fits this ticket?",
+                    options: [
+                        ChoiceOption("billing", description: "Payments and refunds"),
+                        ChoiceOption("bug", description: "Software errors"),
+                        ChoiceOption("account", description: "Login and account access"),
+                        ChoiceOption("sales", description: "Pricing and upgrades"),
+                    ]
+                ),
+                .binary(instructions: "Is the customer requesting a refund?"),
+            ])
+
+            #expect(response.diagnostics.count == 2)
+            // Rotation debiasing evaluates the choice once per option (four prompts)
+            // and the binary question once,
+            // so the first answer's attributed duration is the longer one.
+            #expect(response.diagnostics[0].duration > response.diagnostics[1].duration)
+            #expect(response.diagnostics[1].duration > .zero)
         }
 
         @Test func promptLongerThanBatchSize() async throws {
