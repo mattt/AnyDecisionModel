@@ -18,6 +18,7 @@ let package = Package(
     traits: [
         .trait(name: "MLX"),
         .trait(name: "CoreAI"),
+        .trait(name: "Llama"),
         .default(enabledTraits: []),
     ],
     dependencies: [
@@ -25,6 +26,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-huggingface", "0.9.0" ..< "2.0.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.0.0"),
         .package(url: "https://github.com/john-rocky/coreai-kit", from: "0.7.3"),
+        .package(url: "https://github.com/mattt/llama.swift", .upToNextMajor(from: "2.10549.0")),
     ],
     targets: [
         .target(
@@ -59,6 +61,11 @@ let package = Package(
                     name: "CoreAIKit",
                     package: "coreai-kit",
                     condition: .when(traits: ["CoreAI"])
+                ),
+                .product(
+                    name: "LlamaSwift",
+                    package: "llama.swift",
+                    condition: .when(traits: ["Llama"])
                 ),
             ]
         ),

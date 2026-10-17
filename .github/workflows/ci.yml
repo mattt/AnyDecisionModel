@@ -147,6 +147,41 @@ jobs:
         # xcodebuild cannot enable package traits, so SwiftPM builds for the iOS SDK.
         run: swift build --traits CoreAI --triple arm64-apple-ios26.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --build-path .build/ios
 
+  test-llama:
+    name: Test with Llama on Xcode 26.6
+    # Inference tests need a GGUF model, so they run only locally with LLAMA_MODEL_PATH set.
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: "/Applications/Xcode_26.6.app/Contents/Developer"
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Identify Xcode build
+        id: xcode
+        run: echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-llama-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-llama-spm-
+
+      - name: Build with Llama
+        run: swift build --build-tests --traits Llama
+
+      - name: Test with Llama
+        run: swift test --skip-build --traits Llama
+
+      - name: Build for iOS with Llama
+        # xcodebuild cannot enable package traits, so SwiftPM builds for the iOS SDK.
+        run: swift build --traits Llama --triple arm64-apple-ios26.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --build-path .build/ios
+
   build-ios:
     name: Build for iOS with Xcode 26.6
     runs-on: macos-26
