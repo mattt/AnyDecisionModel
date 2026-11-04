@@ -6,6 +6,7 @@ import Foundation
     import MLXHuggingFace
     import MLXLLM
     import MLXLMCommon
+    import MLXNN
     import Tokenizers
 
     /// A decision model that runs a causal language model locally with MLX.
@@ -14,7 +15,8 @@ import Foundation
     /// with no text generation.
     /// For each allowed answer label, it sums the probability of the label's
     /// single-token variants, then normalizes across the allowed answers.
-    /// Logits are read in float32.
+    /// The model converts half-precision parameters to float32 when it loads,
+    /// so the forward pass and the logits are float32.
     ///
     /// Choice options are labeled A to Z, so a choice can have at most 26 options.
     /// Score levels are labeled 0 to 9, so a score can have at most 10 levels.
@@ -172,24 +174,29 @@ import Foundation
                 return try await containerCache.value(for: cacheKey) {
                     // mlx-swift-lm 3 takes explicit downloader and tokenizer loaders.
                     // The macros back them with HubClient and AutoTokenizer.
+                    let container: ModelContainer
                     if let directory {
-                        return try await loadModelContainer(
+                        container = try await loadModelContainer(
                             from: directory,
                             using: #huggingFaceTokenizerLoader()
                         )
-                    }
-                    if let hub {
-                        return try await loadModelContainer(
+                    } else if let hub {
+                        container = try await loadModelContainer(
                             from: #hubDownloader(hub),
                             using: #huggingFaceTokenizerLoader(),
                             id: modelID
                         )
+                    } else {
+                        container = try await loadModelContainer(
+                            from: #hubDownloader(),
+                            using: #huggingFaceTokenizerLoader(),
+                            id: modelID
+                        )
                     }
-                    return try await loadModelContainer(
-                        from: #hubDownloader(),
-                        using: #huggingFaceTokenizerLoader(),
-                        id: modelID
-                    )
+                    await container.perform { context in
+                        convertFloatingPointParametersToFloat32(context.model)
+                    }
+                    return container
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -199,6 +206,30 @@ import Foundation
                 throw DecisionError.modelUnavailable(String(describing: error))
             }
         }
+    }
+
+    /// Converts a model's half-precision parameters to float32,
+    /// so that the forward pass computes in float32.
+    ///
+    /// Quantized weights keep their packed integer type;
+    /// their scales and biases, norms, and unquantized weights become float32.
+    ///
+    /// In MLX 0.32, a half-precision matrix multiplication can round a row differently
+    /// depending on how many rows the call has.
+    /// So a prompt's logits depend on how much of it the prefix cache holds
+    /// and on which other prompts share its batch.
+    /// With Qwen3 4B 4-bit in bfloat16, one answer probability was 0.05, 0.10, 0.18, or 0.38,
+    /// depending on prefix caching and batching;
+    /// in float32, it was 0.075 on every path.
+    /// The conversion makes Qwen3 4B 4-bit 11% larger, from 2.26 GB to 2.51 GB,
+    /// and doubles the size of an unquantized half-precision model.
+    private func convertFloatingPointParametersToFloat32(_ model: any LanguageModel) {
+        let parameters = model.parameters().flattened().compactMap { key, value -> (String, MLXArray)? in
+            value.dtype == .bfloat16 || value.dtype == .float16 ? (key, value.asType(.float32)) : nil
+        }
+        guard !parameters.isEmpty else { return }
+        model.update(parameters: ModuleParameters.unflattened(parameters))
+        eval(model)
     }
 
     // MARK: - Shared weights
