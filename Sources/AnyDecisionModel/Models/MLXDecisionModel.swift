@@ -478,7 +478,7 @@ import Foundation
                 return
             }
 
-            let cache = makeCache(for: context.model)
+            let cache = try makeCache(for: context.model)
             try prefill(prefixTokens, cache: cache, model: context.model)
             prefix.tokens = prefixTokens
             prefix.layers = cache
@@ -539,7 +539,7 @@ import Foundation
             tokenMaps: [[[Int]]],
             context: ModelContext
         ) throws -> [EvaluationResult] {
-            let empty = makeCache(for: context.model)
+            let empty = try makeCache(for: context.model)
             let maximumBatchSize = empty is [BatchKVCache] ? model.maximumBatchSize : 1
 
             // Prompts that are evaluated together must all begin with the prefix cache to use it.
@@ -662,8 +662,8 @@ import Foundation
         /// Models whose layers all use plain key-value caches get a ``BatchKVCache`` for each layer.
         /// It can hold a batch of prompts,
         /// and it uses an explicit causal mask when queries follow cached keys.
-        private func makeCache(for model: any LanguageModel) -> [any KVCache] {
-            let cache = model.newCache(parameters: nil)
+        private func makeCache(for model: any LanguageModel) throws -> [any KVCache] {
+            let cache = try model.newCache(parameters: nil)
             guard cache.allSatisfy({ type(of: $0) == KVCacheSimple.self }) else { return cache }
             return cache.map { _ in BatchKVCache() }
         }

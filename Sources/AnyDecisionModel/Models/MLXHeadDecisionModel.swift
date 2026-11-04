@@ -484,7 +484,7 @@ import Foundation
             if prefix.state == state, prefix.layers != nil { return }
             try Task.checkCancellation()
 
-            let cache = makeCache(for: model)
+            let cache = try makeCache(for: model)
             let hidden = try hiddenStates(tokens, cache: cache, model: model)
             prefix.layers = cache
             prefix.hidden = hidden
@@ -508,7 +508,7 @@ import Foundation
             if cache == nil, tokens.count <= chunkLength {
                 return forward(tokens, cache: nil, model: model)
             }
-            let cache = cache ?? makeCache(for: model)
+            let cache = try cache ?? makeCache(for: model)
             var chunks: [MLXArray] = []
             for start in stride(from: 0, to: tokens.count, by: chunkLength) {
                 try Task.checkCancellation()
@@ -525,8 +525,8 @@ import Foundation
         /// The symbolic causal mask in MLX 0.31.1 is wrong for some shapes
         /// in which queries follow cached keys.
         /// Other layers, such as Gated DeltaNet layers, keep the model's own caches.
-        private func makeCache(for model: any LanguageModel) -> [any KVCache] {
-            model.newCache(parameters: nil).map { layer in
+        private func makeCache(for model: any LanguageModel) throws -> [any KVCache] {
+            try model.newCache(parameters: nil).map { layer in
                 type(of: layer) == KVCacheSimple.self ? BatchKVCache() : layer
             }
         }
