@@ -175,11 +175,6 @@ so that prefix caching and batching don't change the rounding of results.
 This makes Qwen3 4B 4-bit 11% larger
 and doubles the size of an unquantized half-precision model.
 
-> [!NOTE]
-> The `MLX` trait pins mlx-swift-lm to 3.31.
-> An app can't use this trait together with a package that requires mlx-swift-lm 3.32,
-> such as AnyLanguageModel 1.0 with its `MLX` trait.
-
 ### MLX decision heads
 
 `MLXHeadDecisionModel` runs a model that has its own trained decision head.
