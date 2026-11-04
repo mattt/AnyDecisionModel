@@ -169,6 +169,12 @@ With `prefixCaching: true`, each session evaluates its state once
 and each question runs on a copy of that cache.
 Compare cached and uncached results for your model before enabling it.
 
+The model computes in float32.
+When it loads a model, it converts the half-precision parameters to float32,
+so that prefix caching and batching don't change the rounding of results.
+This makes Qwen3 4B 4-bit 11% larger
+and doubles the size of an unquantized half-precision model.
+
 > [!NOTE]
 > The `MLX` trait pins mlx-swift-lm to 3.31.
 > An app can't use this trait together with a package that requires mlx-swift-lm 3.32,
