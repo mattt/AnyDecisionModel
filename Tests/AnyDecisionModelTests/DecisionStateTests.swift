@@ -92,11 +92,31 @@ struct DecisionStateTests {
         #expect(try encode(state).hasPrefix(#"{"$json":"#))
     }
 
-    @Test func rejectsUnknownSegmentKind() {
+    @Test func unknownSegmentKindDecodesAsJSON() throws {
         let json = #"{"$segments": [{"kind": "sticker"}]}"#
-        #expect(throws: DecodingError.self) {
-            _ = try JSONDecoder().decode(DecisionState.self, from: Data(json.utf8))
-        }
+        let state = try JSONDecoder().decode(DecisionState.self, from: Data(json.utf8))
+        #expect(state == .json(["$segments": [["kind": "sticker"]]]))
+    }
+
+    // MARK: - Data encoded by 0.7.0
+
+    // AnyDecisionModel 0.7.0 encoded every JSON state as its bare value.
+
+    @Test(
+        arguments: [
+            (#"{"$segments":1}"#, DecisionState.json(["$segments": 1])),
+            (#"{"$segments":"x"}"#, DecisionState.json(["$segments": "x"])),
+            (#"{"$segments":1,"other":2}"#, DecisionState.json(["$segments": 1, "other": 2])),
+        ]
+    )
+    func legacySegmentsKeyDecodesAsJSON(json: String, expected: DecisionState) throws {
+        #expect(try JSONDecoder().decode(DecisionState.self, from: Data(json.utf8)) == expected)
+    }
+
+    @Test func legacyJSONKeyDecodesAsEscapedValue() throws {
+        // This is the documented difference from 0.7.0, which decoded this object as itself.
+        let state = try JSONDecoder().decode(DecisionState.self, from: Data(#"{"$json":1}"#.utf8))
+        #expect(state == .json(1))
     }
 
     // MARK: - Equality

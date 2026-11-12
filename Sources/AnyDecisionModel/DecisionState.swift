@@ -265,6 +265,18 @@ extension DecisionState {
 /// encodes inside an object with the only key `$json`,
 /// so that it can't be confused with a segments state.
 /// Every other JSON state encodes as before.
+///
+/// When decoding, an object whose only key is `$segments`
+/// is a segments state only if its value decodes as an array of segments;
+/// otherwise, the object is a JSON state.
+/// An object whose only key is `$json` is the escaped JSON state inside it.
+///
+/// So data that AnyDecisionModel 0.7.0 or earlier encoded decodes as before,
+/// with two exceptions.
+/// A JSON object with `$json` as its only key, such as `{"$json": 1}`,
+/// decodes as the JSON value inside it, such as `1`.
+/// A JSON object with `$segments` as its only key and an array of segments as its value,
+/// such as `{"$segments": []}`, decodes as a segments state.
 extension DecisionState: Codable {
     fileprivate static let segmentsKey = "$segments"
     fileprivate static let escapeKey = "$json"
@@ -277,8 +289,13 @@ extension DecisionState: Codable {
         case .object(let object) where object.count == 1 && object[Self.escapeKey] != nil:
             self = .json(object[Self.escapeKey]!)
         case .object(let object) where object.count == 1 && object[Self.segmentsKey] != nil:
+            // A value that isn't an array of segments is a JSON state that an earlier version encoded.
             let container = try decoder.container(keyedBy: TaggedKeys.self)
-            self = .segments(try container.decode([Segment].self, forKey: .segments))
+            if let segments = try? container.decode([Segment].self, forKey: .segments) {
+                self = .segments(segments)
+            } else {
+                self = .json(value)
+            }
         default:
             self = .json(value)
         }
