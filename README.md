@@ -32,7 +32,7 @@ a probability for each option, and a confidence value.
 `anger` is a `Score` with the expected level,
 a probability for each level, and a confidence value.
 
-Six backends are available:
+Seven backends are available:
 
 - [x] [MLX](#mlx) runs a small language model on Apple silicon
   and reads each decision from next-token probabilities in one forward pass.
@@ -45,11 +45,13 @@ Six backends are available:
 - [x] [Ollama](#ollama) calls a System One model in
   [Ollama](https://docs.ollama.com/capabilities/decision),
   locally or in Ollama's cloud.
+- [x] [Gemini](#gemini) calls Google's
+  [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
 
 ## Requirements
 
 - Swift 6.2+
-- macOS 26+ / iOS 26+ / Linux (core library, Jev, and Ollama backends only)
+- macOS 26+ / iOS 26+ / Linux (core library, Jev, Ollama, and Gemini backends only)
 - Ollama: Ollama v0.35.0 or later (v0.40.5 or later for cloud models)
 - MLX: Apple silicon and the Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`)
@@ -67,7 +69,7 @@ dependencies: [
 ```
 
 Without traits, the package has no third-party dependencies
-and provides the core types and the Jev and Ollama backends.
+and provides the core types and the Jev, Ollama, and Gemini backends.
 Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
 ```swift
@@ -294,6 +296,34 @@ Ollama's probabilities and confidence values are returned unchanged.
 If the server rounds the probabilities,
 they can sum to slightly more or less than 1.
 
+### Gemini
+
+`GeminiDecisionModel` sends each batch to `POST /v1beta/decisions`
+on the [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
+The API key comes from `GEMINI_API_KEY`, or you can pass it to the initializer:
+
+```swift
+let model = GeminiDecisionModel()
+let session = DecisionSession(model: model, state: .text(ticket))
+let urgent = try await session.probability(of: "Does this convey urgency?")
+```
+
+The model defaults to `gemini-decision-1`.
+A text state is sent as the input text,
+and a JSON state is sent as compact JSON text with sorted keys.
+A request can have at most 1,000 questions,
+a choice must have 2 to 255 options,
+and a score must have 2 to 255 non-empty levels.
+The model checks these limits and Gemini's rules for option names before it sends a request.
+If Gemini blocks the input, the model throws `DecisionError.inputBlocked`.
+
+Gemini's probabilities and confidence values are returned unchanged.
+Gemini clamps the probability of a binary answer to 0.01 through 0.99,
+so a binary answer is never 0 or 1.
+Gemini also returns a confidence value for binary answers,
+which the model drops because `Answer.binary` has no confidence value.
+The model does not retry failed requests.
+
 ## Calibration and confidence
 
 Raw probabilities from language models are often overconfident.
@@ -318,7 +348,7 @@ This measures how concentrated the distribution is,
 not the probability that the answer is correct.
 The model can be confident and wrong,
 so measure the error rate on your own data before you choose a threshold.
-Jev and other System One servers compute confidence with their own formulas,
+Jev, other System One servers, and Gemini compute confidence with their own formulas,
 so do not compare confidence values between backends.
 
 Each local answer also reports an allowed-answer mass in `DecisionSession.Diagnostics`:
@@ -327,7 +357,8 @@ A low value means that the model wanted to reply with something else.
 
 ## Limitations
 
-- Wire compatibility with Jev and Ollama is tested against fixtures, not live services.
+- Wire compatibility with Jev, Ollama, and Gemini is tested against fixtures, not live services.
+  A live Gemini test runs when `GEMINI_API_KEY` is set.
 - Calibration was fitted on two tasks.
   Whether it transfers to other tasks is untested.
 - Do not rely on typed output alone to resist injected instructions.
