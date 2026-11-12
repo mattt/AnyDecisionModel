@@ -40,22 +40,27 @@ public enum DecisionState: Hashable, Sendable {
         }
     }
 
-    /// The state as a JSON value, for prompts and System One requests.
+    /// Returns the state as a JSON value, for prompts and System One requests.
     ///
+    /// A text state is a string, and a JSON state is its value.
     /// A state of text segments only is the text of the segments, joined by newlines.
-    /// A state with attachments is its tagged `Codable` form;
-    /// a session does not pass such a state to a model that does not support attachments.
-    var jsonValue: JSONValue {
+    ///
+    /// - Throws: ``DecisionError/unsupportedState(_:)``
+    ///   if the state has attachments,
+    ///   which have no text or JSON form.
+    func textOrJSONValue() throws -> JSONValue {
         switch self {
         case .text(let text):
             return .string(text)
         case .json(let value):
             return value
         case .segments(let segments):
-            if attachments.isEmpty {
-                return .string(Segment.joinedText(segments))
+            guard attachments.isEmpty else {
+                throw DecisionError.unsupportedState(
+                    "The model reads text and JSON only, and the state has attachments."
+                )
             }
-            return taggedJSONValue(segments)
+            return .string(Segment.joinedText(segments))
         }
     }
 

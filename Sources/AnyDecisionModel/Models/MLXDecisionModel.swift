@@ -350,7 +350,7 @@ import Foundation
                         try stride(from: task, to: prompts.count, by: taskCount).map { index in
                             try Task.checkCancellation()
                             let prompt = prompts[index]
-                            let user = TokenScoring.userMessage(
+                            let user = try TokenScoring.userMessage(
                                 state: state,
                                 question: plans[prompt.planIndex].question,
                                 optionOrder: prompt.order
@@ -464,8 +464,8 @@ import Foundation
             if prefix.state == state, prefix.layers != nil { return }
 
             let tokenizer = context.tokenizer
-            let probeA = TokenScoring.userMessage(state: state, question: .binary(instructions: "A"))
-            let probeB = TokenScoring.userMessage(state: state, question: .binary(instructions: "Z"))
+            let probeA = try TokenScoring.userMessage(state: state, question: .binary(instructions: "A"))
+            let probeB = try TokenScoring.userMessage(state: state, question: .binary(instructions: "Z"))
             let tokensA = try promptTokens(user: probeA, tokenizer: tokenizer)
             let tokensB = try promptTokens(user: probeB, tokenizer: tokenizer)
             let shared = zip(tokensA, tokensB).prefix { $0 == $1 }.count

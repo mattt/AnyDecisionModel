@@ -206,8 +206,8 @@ import Foundation
             return head
         }
 
-        static func prefixTokens(for state: DecisionState, encode: (String) -> [Int]) -> [Int] {
-            JointSchemaEncoding.prefixTokens(for: state, encode: encode)
+        static func prefixTokens(for state: DecisionState, encode: (String) -> [Int]) throws -> [Int] {
+            try JointSchemaEncoding.prefixTokens(for: state, encode: encode)
         }
 
         static func prompt(

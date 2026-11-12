@@ -141,15 +141,15 @@ struct DecisionStateTests {
 
     // MARK: - Prompt text
 
-    @Test func promptTextIsUnchangedForTextAndJSON() {
-        #expect(DecisionState.text("hello").jsonValue.promptText == "hello")
-        #expect(DecisionState.json(["b": 1, "a": 2]).jsonValue.promptText == #"{"a":2,"b":1}"#)
-        #expect(DecisionState.json(["$json": 1]).jsonValue == .object(["$json": 1]))
+    @Test func promptTextIsUnchangedForTextAndJSON() throws {
+        #expect(try DecisionState.text("hello").textOrJSONValue().promptText == "hello")
+        #expect(try DecisionState.json(["b": 1, "a": 2]).textOrJSONValue().promptText == #"{"a":2,"b":1}"#)
+        #expect(try DecisionState.json(["$json": 1]).textOrJSONValue() == .object(["$json": 1]))
     }
 
-    @Test func textOnlySegmentsReadAsJoinedText() {
+    @Test func textOnlySegmentsReadAsJoinedText() throws {
         let state = DecisionState.segments([.text("first"), .text("second")])
-        #expect(state.jsonValue.promptText == "first\nsecond")
+        #expect(try state.textOrJSONValue().promptText == "first\nsecond")
         #expect(state.attachments.isEmpty)
     }
 
@@ -206,6 +206,32 @@ struct UnsupportedAttachmentTests {
             try await session.prewarm()
         }
         #expect(host.recorded.isEmpty)
+    }
+
+    @Test(arguments: ["jev", "ollama"])
+    func executorRejectsAttachmentsWithoutSession(backend: String) async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: #"{"model": "m", "answers": {"0": {"noul": 0.5}}}"#)
+        let model: any DecisionModel =
+            backend == "jev"
+            ? JevDecisionModel(baseURL: host.baseURL, apiKey: "key", session: StubURLProtocol.makeSession())
+            : OllamaDecisionModel(modelID: "nimble", baseURL: host.baseURL, session: StubURLProtocol.makeSession())
+
+        do {
+            _ = try await model.makeExecutor().decide([.binary(instructions: "Is this urgent?")], about: state)
+            Issue.record("Expected an error.")
+        } catch DecisionError.unsupportedState {
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func promptsRejectAttachments() {
+        #expect(throws: DecisionError.self) {
+            _ = try TokenScoring.userMessage(state: state, question: .binary(instructions: "Urgent?"))
+        }
+        #expect(throws: DecisionError.self) {
+            _ = try JointSchemaEncoding.prefixTokens(for: state) { _ in [] }
+        }
     }
 
     @Test func jevSendsTextOnlySegmentsAsString() async throws {

@@ -33,7 +33,8 @@ struct SystemOneRequest: Encodable {
         try container.encode(model, forKey: .model)
         // Encode the JSON value, not the state's tagged `Codable` form,
         // so that every JSON state is sent unchanged.
-        try container.encode(state.jsonValue, forKey: .state)
+        // A state with attachments throws, so that it is never uploaded.
+        try container.encode(state.textOrJSONValue(), forKey: .state)
         try container.encode(questions, forKey: .questions)
         try container.encodeIfPresent(keepAlive, forKey: .keepAlive)
     }

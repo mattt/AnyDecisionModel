@@ -89,8 +89,8 @@ which can be text, JSON, or a list of segments of text and attachments.
 Attachments are images, audio, video, and documents,
 from data or a URL, each with a MIME type.
 Only the Gemini backend reads attachments;
-the other backends throw `DecisionError.unsupportedState` for a state with attachments
-before they do any work.
+the other backends throw `DecisionError.unsupportedState` for a state with attachments,
+and a session throws that error before the model does any work.
 Every question is about that state, and questions are independent:
 an answer never becomes input to a later question.
 Call `prewarm()` to load the model and process the state before the first question.

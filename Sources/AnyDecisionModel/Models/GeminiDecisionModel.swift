@@ -116,7 +116,7 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
             let keys = questions.indices.map(String.init)
             let request = GeminiRequest(
                 model: model.modelID,
-                input: GeminiInput(state),
+                input: try GeminiInput(state),
                 questions: Dictionary(
                     uniqueKeysWithValues: zip(keys, questions.map { SystemOneQuestion($0, dialect: .gemini) })
                 )
@@ -189,7 +189,7 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     ///   a URL that isn't HTTPS, or inline data over the size limits.
     static func check(_ state: DecisionState) throws {
         if state.attachments.isEmpty,
-            state.jsonValue.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            try state.textOrJSONValue().promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             throw DecisionError.unsupportedState("Gemini does not accept empty input.")
         }
@@ -424,9 +424,9 @@ enum GeminiInput: Encodable, Equatable {
     /// A state with attachments is an array of content blocks,
     /// with adjacent text segments joined by a newline into one block
     /// and empty text segments left out.
-    init(_ state: DecisionState) {
+    init(_ state: DecisionState) throws {
         guard case .segments(let segments) = state, !state.attachments.isEmpty else {
-            self = .text(state.jsonValue.promptText)
+            self = .text(try state.textOrJSONValue().promptText)
             return
         }
         var blocks: [Block] = []
