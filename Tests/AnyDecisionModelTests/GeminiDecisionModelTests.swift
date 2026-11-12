@@ -317,6 +317,40 @@ struct GeminiDecisionModelTests {
         #expect(host.recorded.count == 1)
     }
 
+    @Test func badRequestWithOtherStringCodeIsRequestFailed() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(
+            json: #"{"error": {"code": "invalid_argument", "message": "Question key is invalid."}}"#,
+            statusCode: 400
+        )
+        let session = DecisionSession(model: makeModel(host), state: "state")
+        do {
+            _ = try await session.probability(of: "Question?")
+            Issue.record("Expected an error.")
+        } catch let DecisionError.requestFailed(code, detail, _) {
+            #expect(code == 400)
+            #expect(detail.contains("invalid_argument"))
+        }
+    }
+
+    @Test(
+        arguments: [
+            "not JSON",
+            #"{"usage": {"total_input_tokens": 3, "total_output_tokens": 0, "total_tokens": 3}}"#,
+        ]
+    )
+    func rejectsResponseThatDoesNotDecode(json: String) async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: json)
+        let session = DecisionSession(model: makeModel(host), state: "state")
+        do {
+            _ = try await session.probability(of: "Question?")
+            Issue.record("Expected an error.")
+        } catch DecisionError.invalidResponse(let detail) {
+            #expect(!detail.hasPrefix("No answer"))
+        }
+    }
+
     @Test func missingAnswer() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"answers": {"other": {"type": "noul", "noul": 0.5, "confidence": 0.5}}}"#)
