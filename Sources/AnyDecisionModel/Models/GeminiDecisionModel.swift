@@ -175,12 +175,25 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     /// The largest total size of inline PDF data in one request, in bytes.
     static let maximumInlinePDFBytes = 50 * 1024 * 1024
 
-    /// Checks the attachments in a state against the documented limits of the Gemini Decisions API.
+    /// Checks a state against the documented rules of the Gemini Decisions API
+    /// that the model can check locally.
+    ///
+    /// Gemini rejects empty input.
+    /// A state without attachments is empty
+    /// if its text has only whitespace and newlines,
+    /// as for question instructions.
+    /// Only the server checks the context window and the sizes of files at URLs.
     ///
     /// - Throws: ``DecisionError/unsupportedState(_:)``
-    ///   for an unsupported MIME type, a URL that isn't HTTPS,
-    ///   or inline data over the size limits.
+    ///   for empty input, empty inline data, an unsupported MIME type,
+    ///   a URL that isn't HTTPS, or inline data over the size limits.
     static func check(_ state: DecisionState) throws {
+        if state.attachments.isEmpty,
+            state.jsonValue.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            throw DecisionError.unsupportedState("Gemini does not accept empty input.")
+        }
+
         var inlineBytes = 0
         var inlinePDFBytes = 0
         for attachment in state.attachments {
@@ -193,6 +206,11 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
             }
             switch attachment.source {
             case .data(let data, _):
+                guard !data.isEmpty else {
+                    throw DecisionError.unsupportedState(
+                        "Gemini does not accept an empty \(attachment.kind.rawValue) attachment."
+                    )
+                }
                 inlineBytes += data.count
                 if mimeType == "application/pdf" {
                     inlinePDFBytes += data.count

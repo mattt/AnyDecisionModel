@@ -487,6 +487,32 @@ struct GeminiDecisionModelTests {
         #expect(host.recorded.isEmpty)
     }
 
+    @Test(
+        arguments: [
+            DecisionState.text(""),
+            DecisionState.text(" \n\t "),
+            DecisionState.json(""),
+            DecisionState.segments([]),
+            DecisionState.segments([.text("")]),
+            DecisionState.segments([.text(" "), .text("\n")]),
+            DecisionState.segments([.attachment(DecisionState.Attachment(imageData: Data(), mimeType: "image/png"))]),
+            DecisionState.segments([
+                .text("A document:"),
+                .attachment(DecisionState.Attachment(documentData: Data())),
+            ]),
+        ]
+    )
+    func rejectsEmptyInputBeforeRequest(state: DecisionState) async throws {
+        let host = StubURLProtocol.Host()
+        let session = DecisionSession(model: makeModel(host), state: state)
+        do {
+            _ = try await session.probability(of: "Urgent?")
+            Issue.record("Expected an error.")
+        } catch DecisionError.unsupportedState {
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
     @Test func acceptsMIMETypeWithParametersAndCase() throws {
         try GeminiDecisionModel.check(
             .segments([

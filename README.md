@@ -343,6 +343,9 @@ Attachment URLs must use HTTPS,
 and the model checks MIME types against Gemini's documented types,
 which include only PDF for documents.
 Inline data can total at most 100 MB in one request, and PDF data at most 50 MB.
+The model rejects an empty input, including text with only whitespace,
+and an attachment with no data.
+Only Gemini checks the context window and the sizes of files at URLs.
 
 Gemini's probabilities and confidence values are returned unchanged.
 Gemini clamps the probability of a binary answer to 0.01 through 0.99,
