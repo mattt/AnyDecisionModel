@@ -16,6 +16,10 @@ public enum DecisionError: Error, Hashable, Sendable {
     /// The index is the position of the question in its batch.
     case unsupportedQuestion(index: Int, reason: String)
 
+    /// The model can't read the state,
+    /// for example because the state has an attachment of a kind that the model does not support.
+    case unsupportedState(String)
+
     /// The model needs an API key and none was configured.
     case missingCredentials
 
@@ -49,6 +53,8 @@ extension DecisionError: LocalizedError, CustomStringConvertible {
             return "Invalid question at index \(index): \(reason)"
         case .unsupportedQuestion(let index, let reason):
             return "Unsupported question at index \(index): \(reason)"
+        case .unsupportedState(let reason):
+            return "Unsupported state: \(reason)"
         case .missingCredentials:
             return "No API key is configured."
         case .requestFailed(let statusCode, let detail, _):

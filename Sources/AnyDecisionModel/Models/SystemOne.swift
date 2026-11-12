@@ -31,7 +31,9 @@ struct SystemOneRequest: Encodable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(model, forKey: .model)
-        try container.encode(state, forKey: .state)
+        // Encode the JSON value, not the state's tagged `Codable` form,
+        // so that every JSON state is sent unchanged.
+        try container.encode(state.jsonValue, forKey: .state)
         try container.encode(questions, forKey: .questions)
         try container.encodeIfPresent(keepAlive, forKey: .keepAlive)
     }

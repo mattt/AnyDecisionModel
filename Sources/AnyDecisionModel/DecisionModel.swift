@@ -49,13 +49,34 @@ public struct DecisionCapabilities: Hashable, Sendable {
     /// The largest number of levels in a score question, or `nil` for no local limit.
     public var maximumScoreLevels: Int?
 
+    /// The kinds of attachments that the model can read in a state.
+    ///
+    /// A session throws ``DecisionError/unsupportedState(_:)``
+    /// for a state with an attachment of another kind,
+    /// before it asks the model to do any work.
+    public var supportedAttachmentKinds: Set<DecisionState.Attachment.Kind>
+
     /// Creates a capabilities description.
     public init(
         maximumChoiceOptions: Int? = nil,
-        maximumScoreLevels: Int? = nil
+        maximumScoreLevels: Int? = nil,
+        supportedAttachmentKinds: Set<DecisionState.Attachment.Kind> = []
     ) {
         self.maximumChoiceOptions = maximumChoiceOptions
         self.maximumScoreLevels = maximumScoreLevels
+        self.supportedAttachmentKinds = supportedAttachmentKinds
+    }
+
+    /// Checks the attachments in a state against the supported kinds.
+    ///
+    /// - Throws: ``DecisionError/unsupportedState(_:)``
+    ///   if the state has an attachment of a kind that the model can't read.
+    func check(_ state: DecisionState, modelDescription: String) throws {
+        for attachment in state.attachments where !supportedAttachmentKinds.contains(attachment.kind) {
+            throw DecisionError.unsupportedState(
+                "\(modelDescription) does not support \(attachment.kind.rawValue) attachments."
+            )
+        }
     }
 
     /// Checks a question against the limits.

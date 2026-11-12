@@ -32,11 +32,17 @@ public final class DecisionSession: Sendable {
         self.executor = model.makeExecutor()
     }
 
+    /// Checks that the model can read the attachments in the state.
+    private func checkState() throws {
+        try model.capabilities.check(state, modelDescription: String(describing: type(of: model)))
+    }
+
     /// Loads the model and precomputes work for the state.
     ///
     /// Calling this method is optional.
     /// It moves loading cost out of the first question.
     public func prewarm() async throws {
+        try checkState()
         try await executor.prewarm(for: state)
     }
 
@@ -47,6 +53,7 @@ public final class DecisionSession: Sendable {
     /// - Throws: ``DecisionError`` if a question is invalid or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
     public func decide(_ questions: [Question]) async throws -> Response {
+        try checkState()
         for (index, question) in questions.enumerated() {
             try question.validate(index: index)
             try model.capabilities.check(question, index: index)
