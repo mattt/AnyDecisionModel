@@ -22,6 +22,11 @@ import Foundation
 ///
 /// A text state is sent as the input text.
 /// A JSON state is sent as compact JSON text with sorted keys.
+/// A ``DecisionState/segments(_:)`` state with attachments
+/// is sent as an array of content blocks, in order.
+/// Gemini joins adjacent text blocks with no separator,
+/// so the model joins adjacent text segments with a newline
+/// and sends them as one block.
 public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     /// The default API base URL.
     public static let defaultBaseURL = URL(string: "https://generativelanguage.googleapis.com")!
@@ -85,7 +90,8 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     public var capabilities: DecisionCapabilities {
         DecisionCapabilities(
             maximumChoiceOptions: Self.maximumCriteria,
-            maximumScoreLevels: Self.maximumCriteria
+            maximumScoreLevels: Self.maximumCriteria,
+            supportedAttachmentKinds: Set(DecisionState.Attachment.Kind.allCases)
         )
     }
 
@@ -103,13 +109,14 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
         func decide(_ questions: [Question], about state: DecisionState) async throws
             -> DecisionSession.Response
         {
+            try GeminiDecisionModel.check(state)
             try GeminiDecisionModel.check(questions)
 
             // Gemini keys questions and answers by identifier. Use each question's position.
             let keys = questions.indices.map(String.init)
             let request = GeminiRequest(
                 model: model.modelID,
-                input: state.jsonValue.promptText,
+                input: GeminiInput(state),
                 questions: Dictionary(
                     uniqueKeysWithValues: zip(keys, questions.map { SystemOneQuestion($0, dialect: .gemini) })
                 )
@@ -133,6 +140,88 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
                 )
             )
         }
+    }
+
+    /// The MIME types that Gemini accepts for each kind of attachment.
+    ///
+    /// The image, audio, and video types are the union of the types
+    /// in Google's guide and API reference.
+    /// For documents, the guide accepts only PDF,
+    /// although the reference lists other document types.
+    static let supportedMIMETypes: [DecisionState.Attachment.Kind: Set<String>] = [
+        .image: [
+            "image/png", "image/jpeg", "image/webp", "image/heic",
+            "image/heif", "image/gif", "image/bmp", "image/tiff",
+        ],
+        .audio: [
+            "audio/wav", "audio/mp3", "audio/mpeg", "audio/aiff", "audio/aac",
+            "audio/ogg", "audio/flac", "audio/m4a", "audio/opus", "audio/webm",
+            "audio/l16", "audio/alaw", "audio/mulaw",
+        ],
+        .video: [
+            "video/mp4", "video/mpeg", "video/mpg", "video/mov", "video/avi",
+            "video/webm", "video/wmv", "video/x-flv", "video/3gpp",
+        ],
+        .document: ["application/pdf"],
+    ]
+
+    /// The largest total size of inline attachment data in one request, in bytes.
+    ///
+    /// Google documents the limit as 100 MB per request.
+    /// The model counts the attachment bytes before base64 encoding
+    /// and treats a megabyte as 2^20 bytes.
+    static let maximumInlineBytes = 100 * 1024 * 1024
+
+    /// The largest total size of inline PDF data in one request, in bytes.
+    static let maximumInlinePDFBytes = 50 * 1024 * 1024
+
+    /// Checks the attachments in a state against the documented limits of the Gemini Decisions API.
+    ///
+    /// - Throws: ``DecisionError/unsupportedState(_:)``
+    ///   for an unsupported MIME type, a URL that isn't HTTPS,
+    ///   or inline data over the size limits.
+    static func check(_ state: DecisionState) throws {
+        var inlineBytes = 0
+        var inlinePDFBytes = 0
+        for attachment in state.attachments {
+            let mimeType = normalizedMIMEType(attachment.mimeType)
+            guard supportedMIMETypes[attachment.kind]?.contains(mimeType) == true else {
+                throw DecisionError.unsupportedState(
+                    "Gemini does not accept \(attachment.kind.rawValue) attachments "
+                        + "of type \"\(attachment.mimeType)\"."
+                )
+            }
+            switch attachment.source {
+            case .data(let data, _):
+                inlineBytes += data.count
+                if mimeType == "application/pdf" {
+                    inlinePDFBytes += data.count
+                }
+            case .url(let url, _):
+                guard url.scheme?.lowercased() == "https" else {
+                    throw DecisionError.unsupportedState(
+                        "Gemini reads attachment URLs over HTTPS only. "
+                            + "Pass the bytes of a local file as data."
+                    )
+                }
+            }
+        }
+        if inlineBytes > maximumInlineBytes {
+            throw DecisionError.unsupportedState(
+                "Gemini accepts at most 100 MB of inline attachment data in one request, not \(inlineBytes) bytes."
+            )
+        }
+        if inlinePDFBytes > maximumInlinePDFBytes {
+            throw DecisionError.unsupportedState(
+                "Gemini accepts at most 50 MB of inline PDF data in one request, not \(inlinePDFBytes) bytes."
+            )
+        }
+    }
+
+    /// Returns a MIME type in lowercase, without parameters such as `rate=16000`.
+    static func normalizedMIMEType(_ mimeType: String) -> String {
+        let essence = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        return essence.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     /// Checks a batch against the limits of the Gemini Decisions API.
@@ -265,11 +354,96 @@ struct GeminiRequest: Encodable {
     /// The model identifier.
     var model: String
 
-    /// The text that every question is about.
-    var input: String
+    /// The input that every question is about.
+    var input: GeminiInput
 
     /// The questions, keyed by question identifier.
     var questions: [String: SystemOneQuestion]
+}
+
+/// The input of a Gemini Decisions API request:
+/// a string, or an array of content blocks.
+enum GeminiInput: Encodable, Equatable {
+    case text(String)
+    case blocks([Block])
+
+    /// A content block.
+    enum Block: Encodable, Equatable {
+        case text(String)
+        case media(type: String, source: DecisionState.Attachment.Source)
+
+        private enum CodingKeys: String, CodingKey {
+            case type
+            case text
+            case data
+            case uri
+            case mimeType = "mime_type"
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case .text(let text):
+                try container.encode("text", forKey: .type)
+                try container.encode(text, forKey: .text)
+            case .media(let type, let source):
+                try container.encode(type, forKey: .type)
+                switch source {
+                case .data(let data, let mimeType):
+                    try container.encode(data.base64EncodedString(), forKey: .data)
+                    try container.encode(mimeType, forKey: .mimeType)
+                case .url(let url, let mimeType):
+                    try container.encode(url.absoluteString, forKey: .uri)
+                    try container.encode(mimeType, forKey: .mimeType)
+                }
+            }
+        }
+    }
+
+    /// Creates the input for a state.
+    ///
+    /// A state without attachments is a string.
+    /// A state with attachments is an array of content blocks,
+    /// with adjacent text segments joined by a newline into one block
+    /// and empty text segments left out.
+    init(_ state: DecisionState) {
+        guard case .segments(let segments) = state, !state.attachments.isEmpty else {
+            self = .text(state.jsonValue.promptText)
+            return
+        }
+        var blocks: [Block] = []
+        var pendingText: [String] = []
+        func flushText() {
+            let text = pendingText.joined(separator: "\n")
+            if !text.isEmpty {
+                blocks.append(.text(text))
+            }
+            pendingText = []
+        }
+        for segment in segments {
+            switch segment {
+            case .text(let text):
+                if !text.isEmpty {
+                    pendingText.append(text)
+                }
+            case .attachment(let attachment):
+                flushText()
+                blocks.append(.media(type: attachment.kind.rawValue, source: attachment.source))
+            }
+        }
+        flushText()
+        self = .blocks(blocks)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .text(let text):
+            try container.encode(text)
+        case .blocks(let blocks):
+            try container.encode(blocks)
+        }
+    }
 }
 
 /// A batch decision response in the Gemini Decisions API wire format.

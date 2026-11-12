@@ -402,6 +402,140 @@ struct GeminiDecisionModelTests {
         #expect(GeminiDecisionModel.invalidOptionNameReason(String(repeating: "\u{1F600}", count: 128)) == nil)
     }
 
+    // MARK: - Attachments
+
+    @Test(arguments: DecisionState.Attachment.Kind.allCases)
+    func sendsInlineAttachmentAsBase64Block(kind: DecisionState.Attachment.Kind) async throws {
+        let mimeType = try #require(GeminiDecisionModel.supportedMIMETypes[kind]?.sorted().first)
+        let bytes = Data([0x01, 0x02, 0x03, 0xFF])
+        let body = try await requestBody(
+            state: .segments([
+                .text("Look at this:"),
+                .attachment(DecisionState.Attachment(kind: kind, source: .data(bytes, mimeType: mimeType))),
+            ]),
+            questions: [.binary(instructions: "Urgent?")]
+        )
+        let input = try #require(body["input"] as? [[String: String]])
+        #expect(
+            input == [
+                ["type": "text", "text": "Look at this:"],
+                ["type": kind.rawValue, "data": bytes.base64EncodedString(), "mime_type": mimeType],
+            ]
+        )
+    }
+
+    @Test(arguments: DecisionState.Attachment.Kind.allCases)
+    func sendsURLAttachmentAsURIBlock(kind: DecisionState.Attachment.Kind) async throws {
+        let mimeType = try #require(GeminiDecisionModel.supportedMIMETypes[kind]?.sorted().first)
+        let url = URL(string: "https://example.com/media/file?sig=abc")!
+        let body = try await requestBody(
+            state: .segments([
+                .attachment(DecisionState.Attachment(kind: kind, source: .url(url, mimeType: mimeType)))
+            ]),
+            questions: [.binary(instructions: "Urgent?")]
+        )
+        let input = try #require(body["input"] as? [[String: String]])
+        #expect(input == [["type": kind.rawValue, "uri": url.absoluteString, "mime_type": mimeType]])
+    }
+
+    @Test func joinsAdjacentTextSegmentsWithNewline() async throws {
+        let image = DecisionState.Attachment(imageData: Data([1]), mimeType: "image/png")
+        let body = try await requestBody(
+            state: .segments([
+                .text("Ticket 1"),
+                .text(""),
+                .text("Ticket 2"),
+                .attachment(image),
+                .text(""),
+                .attachment(image),
+                .text("End"),
+            ]),
+            questions: [.binary(instructions: "Urgent?")]
+        )
+        let input = try #require(body["input"] as? [[String: String]])
+        #expect(input.map { $0["type"] } == ["text", "image", "image", "text"])
+        #expect(input[0]["text"] == "Ticket 1\nTicket 2")
+        #expect(input[3]["text"] == "End")
+    }
+
+    @Test func textOnlySegmentsAreSentAsString() async throws {
+        let body = try await requestBody(
+            state: .segments([.text("first"), .text("second")]),
+            questions: [.binary(instructions: "Urgent?")]
+        )
+        #expect(body["input"] as? String == "first\nsecond")
+    }
+
+    @Test(
+        arguments: [
+            DecisionState.Attachment(imageData: Data([1]), mimeType: "image/svg+xml"),
+            DecisionState.Attachment(imageData: Data([1]), mimeType: "application/octet-stream"),
+            DecisionState.Attachment(audioData: Data([1]), mimeType: "video/mp4"),
+            DecisionState.Attachment(documentData: Data([1]), mimeType: "text/csv"),
+            DecisionState.Attachment(imageURL: URL(string: "http://example.com/a.png")!, mimeType: "image/png"),
+            DecisionState.Attachment(imageURL: URL(fileURLWithPath: "/tmp/a.png"), mimeType: "image/png"),
+        ]
+    )
+    func rejectsUnsupportedAttachmentsBeforeRequest(attachment: DecisionState.Attachment) async throws {
+        let host = StubURLProtocol.Host()
+        let session = DecisionSession(model: makeModel(host), state: .segments([.attachment(attachment)]))
+        do {
+            _ = try await session.probability(of: "Urgent?")
+            Issue.record("Expected an error.")
+        } catch DecisionError.unsupportedState {
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func acceptsMIMETypeWithParametersAndCase() throws {
+        try GeminiDecisionModel.check(
+            .segments([
+                .attachment(DecisionState.Attachment(audioData: Data([1]), mimeType: "audio/L16; rate=16000")),
+                .attachment(DecisionState.Attachment(imageData: Data([1]), mimeType: "IMAGE/PNG")),
+            ])
+        )
+    }
+
+    @Test func checksInlineSizeLimits() throws {
+        let megabyte = 1024 * 1024
+        func state(_ attachments: DecisionState.Attachment...) -> DecisionState {
+            .segments(attachments.map { .attachment($0) })
+        }
+
+        try GeminiDecisionModel.check(
+            state(DecisionState.Attachment(videoData: Data(count: 100 * megabyte), mimeType: "video/mp4"))
+        )
+        #expect(throws: DecisionError.self) {
+            try GeminiDecisionModel.check(
+                state(
+                    DecisionState.Attachment(videoData: Data(count: 60 * megabyte), mimeType: "video/mp4"),
+                    DecisionState.Attachment(imageData: Data(count: 40 * megabyte + 1), mimeType: "image/png")
+                )
+            )
+        }
+
+        try GeminiDecisionModel.check(state(DecisionState.Attachment(documentData: Data(count: 50 * megabyte))))
+        #expect(throws: DecisionError.self) {
+            try GeminiDecisionModel.check(
+                state(
+                    DecisionState.Attachment(documentData: Data(count: 25 * megabyte)),
+                    DecisionState.Attachment(documentData: Data(count: 25 * megabyte + 1))
+                )
+            )
+        }
+
+        // URLs do not count toward the inline limits.
+        try GeminiDecisionModel.check(
+            state(
+                DecisionState.Attachment(videoData: Data(count: 100 * megabyte), mimeType: "video/mp4"),
+                DecisionState.Attachment(
+                    videoURL: URL(string: "https://example.com/v.mp4")!,
+                    mimeType: "video/mp4"
+                )
+            )
+        )
+    }
+
     // MARK: - Configuration
 
     @Test func environmentAPIKey() {
@@ -444,5 +578,25 @@ struct GeminiDecisionModelLiveTests {
         }
         #expect((0.01 ... 0.99).contains(probability))
         #expect(response.usage.inputTokenCount > 0)
+    }
+
+    @Test func image() async throws {
+        // A 16 by 16 pixel PNG image filled with red.
+        let png = try #require(
+            Data(
+                base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR42mP4z8BAEmIY1TCqYfhqAACQ"
+                    + "+f8B8u7oVwAAAABJRU5ErkJggg=="
+            )
+        )
+        let session = DecisionSession(
+            model: GeminiDecisionModel(),
+            state: .segments([
+                .text("An image:"),
+                .attachment(DecisionState.Attachment(imageData: png, mimeType: "image/png")),
+            ])
+        )
+
+        let red = try await session.probability(of: "Is the image red?")
+        #expect(red > 0.5)
     }
 }
