@@ -394,7 +394,16 @@ extension DecisionState.Attachment.Source: Codable {
             }
             self = .data(data, mimeType: mimeType)
         case "url":
-            self = .url(try container.decode(URL.self, forKey: .url), mimeType: mimeType)
+            // Decode the URL from a string, because only `JSONDecoder` decodes `URL` from a string.
+            let string = try container.decode(String.self, forKey: .url)
+            guard let url = URL(string: string) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .url,
+                    in: container,
+                    debugDescription: "The attachment URL is not valid."
+                )
+            }
+            self = .url(url, mimeType: mimeType)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -413,7 +422,7 @@ extension DecisionState.Attachment.Source: Codable {
             try container.encode(mimeType, forKey: .mimeType)
         case .url(let url, let mimeType):
             try container.encode("url", forKey: .kind)
-            try container.encode(url, forKey: .url)
+            try container.encode(url.absoluteString, forKey: .url)
             try container.encode(mimeType, forKey: .mimeType)
         }
     }

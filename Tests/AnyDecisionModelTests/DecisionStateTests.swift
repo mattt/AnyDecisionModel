@@ -73,6 +73,33 @@ struct DecisionStateTests {
         #expect(try roundTrip(state) == state)
     }
 
+    @Test func segmentsRoundTripThroughPropertyList() throws {
+        struct Saved: Codable, Equatable {
+            var state: DecisionState
+        }
+        let saved = Saved(
+            state: .segments([
+                .text("A photo:"),
+                .attachment(DecisionState.Attachment(imageURL: photoURL, mimeType: "image/jpeg")),
+                .attachment(DecisionState.Attachment(imageData: pngData, mimeType: "image/png")),
+            ])
+        )
+        let data = try PropertyListEncoder().encode(saved)
+        #expect(try PropertyListDecoder().decode(Saved.self, from: data) == saved)
+    }
+
+    @Test func rejectsInvalidAttachmentURL() {
+        let json =
+            #"{"$segments": [{"kind": "attachment", "attachment": {"kind": "image", "#
+            + #""source": {"kind": "url", "url": "", "mimeType": "image/png"}}}]}"#
+        let state = try? JSONDecoder().decode(DecisionState.self, from: Data(json.utf8))
+        // The segments don't decode, so the object is a JSON state.
+        guard case .json = state else {
+            Issue.record("Expected a JSON state.")
+            return
+        }
+    }
+
     @Test func textOnlySegmentsStaySegments() throws {
         let state = DecisionState.segments([.text("a"), .text("b")])
         #expect(try roundTrip(state) == state)
