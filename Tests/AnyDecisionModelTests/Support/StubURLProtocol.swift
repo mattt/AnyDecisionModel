@@ -20,6 +20,7 @@ final class StubURLProtocol: URLProtocol {
     }
 
     struct Recorded: Sendable {
+        var url: URL?
         var body: Data
         var headers: [String: String]
     }
@@ -73,7 +74,7 @@ final class StubURLProtocol: URLProtocol {
         let host = request.url?.host ?? ""
 
         let exchange = Self.state.withLock { state -> Exchange? in
-            state[host, default: HostState()].recorded.append(Recorded(body: body, headers: headers))
+            state[host, default: HostState()].recorded.append(Recorded(url: request.url, body: body, headers: headers))
             guard state[host]?.pending.isEmpty == false else { return nil }
             return state[host]?.pending.removeFirst()
         }
