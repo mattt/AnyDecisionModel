@@ -84,7 +84,13 @@ Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
 ### Sessions and questions
 
-A `DecisionSession` holds one immutable state, which can be text or JSON.
+A `DecisionSession` holds one immutable state,
+which can be text, JSON, or a list of segments of text and attachments.
+Attachments are images, audio, video, and documents,
+from data or a URL, each with a MIME type.
+Only the Gemini backend reads attachments;
+the other backends throw `DecisionError.unsupportedState` for a state with attachments
+before they do any work.
 Every question is about that state, and questions are independent:
 an answer never becomes input to a later question.
 Call `prewarm()` to load the model and process the state before the first question.
@@ -316,6 +322,27 @@ a choice must have 2 to 255 options,
 and a score must have 2 to 255 non-empty levels.
 The model checks these limits and Gemini's rules for option names before it sends a request.
 If Gemini blocks the input, the model throws `DecisionError.inputBlocked`.
+
+To ask about images, audio, video, or PDF documents,
+pass a state of text and attachment segments:
+
+```swift
+let state = DecisionState.segments([
+    .text("A photo from a customer's damage claim:"),
+    .attachment(DecisionState.Attachment(imageData: jpeg, mimeType: "image/jpeg")),
+    .attachment(DecisionState.Attachment(documentURL: receiptURL)),
+])
+let session = DecisionSession(model: GeminiDecisionModel(), state: state)
+let damaged = try await session.probability(of: "Is the item damaged?")
+```
+
+The model sends the segments in order as Gemini content blocks.
+Gemini joins adjacent text blocks with no separator,
+so the model joins adjacent text segments with a newline.
+Attachment URLs must use HTTPS,
+and the model checks MIME types against Gemini's documented types,
+which include only PDF for documents.
+Inline data can total at most 100 MB in one request, and PDF data at most 50 MB.
 
 Gemini's probabilities and confidence values are returned unchanged.
 Gemini clamps the probability of a binary answer to 0.01 through 0.99,
