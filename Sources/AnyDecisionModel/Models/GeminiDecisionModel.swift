@@ -144,10 +144,8 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
 
     /// The MIME types that Gemini accepts for each kind of attachment.
     ///
-    /// The image, audio, and video types are the union of the types
-    /// in Google's guide and API reference.
-    /// For documents, the guide accepts only PDF,
-    /// although the reference lists other document types.
+    /// The types come from the Inputs table in Google's guide to the Decisions API,
+    /// which accepts only PDF for documents.
     static let supportedMIMETypes: [DecisionState.Attachment.Kind: Set<String>] = [
         .image: [
             "image/png", "image/jpeg", "image/webp", "image/heic",
@@ -159,7 +157,7 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
             "audio/l16", "audio/alaw", "audio/mulaw",
         ],
         .video: [
-            "video/mp4", "video/mpeg", "video/mpg", "video/mov", "video/avi",
+            "video/mp4", "video/mpeg", "video/mov", "video/avi",
             "video/webm", "video/wmv", "video/x-flv", "video/3gpp",
         ],
         .document: ["application/pdf"],
@@ -172,7 +170,9 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     /// and treats a megabyte as 2^20 bytes.
     static let maximumInlineBytes = 100 * 1024 * 1024
 
-    /// The largest total size of inline PDF data in one request, in bytes.
+    /// The largest size of one inline PDF document, in bytes.
+    ///
+    /// Google documents the limit as 50 MB for each PDF passed as inline data.
     static let maximumInlinePDFBytes = 50 * 1024 * 1024
 
     /// Checks a state against the documented rules of the Gemini Decisions API
@@ -195,9 +195,8 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
         }
 
         var inlineBytes = 0
-        var inlinePDFBytes = 0
         for attachment in state.attachments {
-            let mimeType = normalizedMIMEType(attachment.mimeType)
+            let mimeType = mimeTypeEssence(attachment.mimeType)
             guard supportedMIMETypes[attachment.kind]?.contains(mimeType) == true else {
                 throw DecisionError.unsupportedState(
                     "Gemini does not accept \(attachment.kind.rawValue) attachments "
@@ -211,10 +210,12 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
                         "Gemini does not accept an empty \(attachment.kind.rawValue) attachment."
                     )
                 }
-                inlineBytes += data.count
-                if mimeType == "application/pdf" {
-                    inlinePDFBytes += data.count
+                if mimeType == "application/pdf", data.count > maximumInlinePDFBytes {
+                    throw DecisionError.unsupportedState(
+                        "Gemini accepts inline PDF documents of at most 50 MB, not \(data.count) bytes."
+                    )
                 }
+                inlineBytes += data.count
             case .url(let url, _):
                 guard url.scheme?.lowercased() == "https" else {
                     throw DecisionError.unsupportedState(
@@ -229,17 +230,24 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
                 "Gemini accepts at most 100 MB of inline attachment data in one request, not \(inlineBytes) bytes."
             )
         }
-        if inlinePDFBytes > maximumInlinePDFBytes {
-            throw DecisionError.unsupportedState(
-                "Gemini accepts at most 50 MB of inline PDF data in one request, not \(inlinePDFBytes) bytes."
-            )
-        }
     }
 
-    /// Returns a MIME type in lowercase, without parameters such as `rate=16000`.
-    static func normalizedMIMEType(_ mimeType: String) -> String {
+    /// Returns the type and subtype of a MIME type in lowercase,
+    /// without parameters such as `rate=16000`.
+    static func mimeTypeEssence(_ mimeType: String) -> String {
         let essence = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
         return essence.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    /// Returns the MIME type to send:
+    /// the type and subtype in lowercase, followed by any parameters unchanged.
+    ///
+    /// For example, `audio/L16; rate=16000` becomes `audio/l16; rate=16000`.
+    static func normalizedMIMEType(_ mimeType: String) -> String {
+        let parts = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+        let essence = mimeTypeEssence(mimeType)
+        guard parts.count == 2 else { return essence }
+        return essence + ";" + parts[1]
     }
 
     /// Checks a batch against the limits of the Gemini Decisions API.
@@ -409,10 +417,10 @@ enum GeminiInput: Encodable, Equatable {
                 switch source {
                 case .data(let data, let mimeType):
                     try container.encode(data.base64EncodedString(), forKey: .data)
-                    try container.encode(mimeType, forKey: .mimeType)
+                    try container.encode(GeminiDecisionModel.normalizedMIMEType(mimeType), forKey: .mimeType)
                 case .url(let url, let mimeType):
                     try container.encode(url.absoluteString, forKey: .uri)
-                    try container.encode(mimeType, forKey: .mimeType)
+                    try container.encode(GeminiDecisionModel.normalizedMIMEType(mimeType), forKey: .mimeType)
                 }
             }
         }

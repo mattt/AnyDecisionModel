@@ -342,7 +342,7 @@ so the model joins adjacent text segments with a newline.
 Attachment URLs must use HTTPS,
 and the model checks MIME types against Gemini's documented types,
 which include only PDF for documents.
-Inline data can total at most 100 MB in one request, and PDF data at most 50 MB.
+Inline data can total at most 100 MB in one request, and each inline PDF can be at most 50 MB.
 The model rejects an empty input, including text with only whitespace,
 and an attachment with no data.
 Only Gemini checks the context window and the sizes of files at URLs.

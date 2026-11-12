@@ -472,6 +472,7 @@ struct GeminiDecisionModelTests {
             DecisionState.Attachment(imageData: Data([1]), mimeType: "application/octet-stream"),
             DecisionState.Attachment(audioData: Data([1]), mimeType: "video/mp4"),
             DecisionState.Attachment(documentData: Data([1]), mimeType: "text/csv"),
+            DecisionState.Attachment(videoData: Data([1]), mimeType: "video/mpg"),
             DecisionState.Attachment(imageURL: URL(string: "http://example.com/a.png")!, mimeType: "image/png"),
             DecisionState.Attachment(imageURL: URL(fileURLWithPath: "/tmp/a.png"), mimeType: "image/png"),
         ]
@@ -528,6 +529,7 @@ struct GeminiDecisionModelTests {
             .segments(attachments.map { .attachment($0) })
         }
 
+        // The total of all inline data can be at most 100 MB.
         try GeminiDecisionModel.check(
             state(DecisionState.Attachment(videoData: Data(count: 100 * megabyte), mimeType: "video/mp4"))
         )
@@ -540,12 +542,25 @@ struct GeminiDecisionModelTests {
             )
         }
 
+        // Each inline PDF can be at most 50 MB.
         try GeminiDecisionModel.check(state(DecisionState.Attachment(documentData: Data(count: 50 * megabyte))))
+        try GeminiDecisionModel.check(
+            state(
+                DecisionState.Attachment(documentData: Data(count: 30 * megabyte)),
+                DecisionState.Attachment(documentData: Data(count: 30 * megabyte))
+            )
+        )
+        #expect(throws: DecisionError.self) {
+            try GeminiDecisionModel.check(
+                state(DecisionState.Attachment(documentData: Data(count: 50 * megabyte + 1)))
+            )
+        }
         #expect(throws: DecisionError.self) {
             try GeminiDecisionModel.check(
                 state(
-                    DecisionState.Attachment(documentData: Data(count: 25 * megabyte)),
-                    DecisionState.Attachment(documentData: Data(count: 25 * megabyte + 1))
+                    DecisionState.Attachment(documentData: Data(count: 50 * megabyte)),
+                    DecisionState.Attachment(documentData: Data(count: 50 * megabyte)),
+                    DecisionState.Attachment(imageData: Data(count: 1), mimeType: "image/png")
                 )
             )
         }
@@ -560,6 +575,20 @@ struct GeminiDecisionModelTests {
                 )
             )
         )
+    }
+
+    @Test func sendsNormalizedMIMEType() async throws {
+        let body = try await requestBody(
+            state: .segments([
+                .attachment(DecisionState.Attachment(audioData: Data([1]), mimeType: "Audio/L16; rate=16000")),
+                .attachment(
+                    DecisionState.Attachment(imageURL: URL(string: "https://example.com/a.png")!, mimeType: "IMAGE/PNG")
+                ),
+            ]),
+            questions: [.binary(instructions: "Urgent?")]
+        )
+        let input = try #require(body["input"] as? [[String: String]])
+        #expect(input.map { $0["mime_type"] } == ["audio/l16; rate=16000", "image/png"])
     }
 
     // MARK: - Configuration
