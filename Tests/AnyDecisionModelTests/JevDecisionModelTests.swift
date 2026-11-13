@@ -461,7 +461,9 @@ struct JevDecisionModelTests {
         let session = DecisionSession(model: makeModel(host), state: "state")
 
         let task = Task { try await session.probability(of: "Question?") }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // The stub delays its response for 5 seconds,
+        // so the request is still in flight when the test cancels it.
+        try await host.waitForRequests()
         task.cancel()
         await #expect(throws: CancellationError.self) {
             _ = try await task.value
@@ -480,7 +482,12 @@ struct JevDecisionModelTests {
         let session = DecisionSession(model: model, state: "state")
 
         let task = Task { try await session.probability(of: "Question?") }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await host.waitForRequests()
+        // The stub answers the first request at once with a 429,
+        // so after this short pause the model is usually in its 10-second backoff.
+        // If the runner is slow and the request is still in flight,
+        // cancellation stops it there, and the test still passes.
+        try await Task.sleep(for: .milliseconds(100))
         task.cancel()
         await #expect(throws: CancellationError.self) {
             _ = try await task.value
