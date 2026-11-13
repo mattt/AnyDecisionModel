@@ -221,7 +221,7 @@ import Testing
             let tokenizer = await loaded.container.tokenizer
             let encode = { (text: String) in tokenizer.encode(text: text, addSpecialTokens: false) }
             for item in fixture.cases {
-                let prefix = JointSchemaHead.prefixTokens(for: item.state.state, encode: encode)
+                let prefix = try JointSchemaHead.prefixTokens(for: item.state.state, encode: encode)
                 let (tokens, _) = JointSchemaHead.prompt(for: item.question.question, encode: encode)
                 #expect(prefix + tokens == item.inputIDs, Comment(rawValue: item.name))
             }

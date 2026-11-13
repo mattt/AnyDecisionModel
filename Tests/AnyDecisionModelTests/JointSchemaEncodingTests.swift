@@ -111,7 +111,7 @@ struct JointSchemaEncodingTests {
         let fixture = try EncodingFixture.load()
         #expect(!fixture.cases.isEmpty)
         for item in fixture.cases {
-            let prefix = JointSchemaEncoding.prefixTokens(for: item.state.state, encode: scalarTokens)
+            let prefix = try JointSchemaEncoding.prefixTokens(for: item.state.state, encode: scalarTokens)
             let field = JointSchemaEncoding.field(for: item.question.question, encode: scalarTokens)
             let comment = Comment(rawValue: item.name)
 

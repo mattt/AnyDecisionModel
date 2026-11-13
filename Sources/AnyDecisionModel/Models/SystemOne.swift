@@ -31,18 +31,46 @@ struct SystemOneRequest: Encodable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(model, forKey: .model)
-        try container.encode(state, forKey: .state)
+        // Encode the JSON value, not the state's tagged `Codable` form,
+        // so that every JSON state is sent unchanged.
+        // A state with attachments throws, so that it is never uploaded.
+        try container.encode(state.textOrJSONValue(), forKey: .state)
         try container.encode(questions, forKey: .questions)
         try container.encodeIfPresent(keepAlive, forKey: .keepAlive)
     }
 }
 
 /// A question in the System One wire format.
+///
+/// The Gemini Decisions API uses the same question format,
+/// except for the names of the binary criteria keys
+/// and the value for an option without a description.
 struct SystemOneQuestion: Encodable {
+    /// A variant of the question wire format.
+    enum Dialect {
+        /// System One, as Jev and Ollama implement it.
+        ///
+        /// Binary criteria use the keys `true` and `false`,
+        /// and an option without a description is `null`.
+        case systemOne
+
+        /// The Gemini Decisions API.
+        ///
+        /// Binary criteria use the keys `true_description` and `false_description`,
+        /// and an option without a description is an empty string.
+        case gemini
+    }
+
     var question: Question
+    var dialect: Dialect
 
     init(_ question: Question) {
+        self.init(question, dialect: .systemOne)
+    }
+
+    init(_ question: Question, dialect: Dialect) {
         self.question = question
+        self.dialect = dialect
     }
 
     /// The wire name for the question type.
@@ -65,6 +93,11 @@ struct SystemOneQuestion: Encodable {
         case whenFalse = "false"
     }
 
+    private enum GeminiBinaryCriteriaKeys: String, CodingKey {
+        case whenTrue = "true_description"
+        case whenFalse = "false_description"
+    }
+
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(typeName, forKey: .type)
@@ -72,18 +105,33 @@ struct SystemOneQuestion: Encodable {
         switch question {
         case .binary(let instructions, let criteria):
             try container.encode(instructions, forKey: .instructions)
-            if let criteria {
+            guard let criteria else { break }
+            switch dialect {
+            case .systemOne:
                 var nested = container.nestedContainer(keyedBy: BinaryCriteriaKeys.self, forKey: .criteria)
+                try nested.encode(criteria.whenTrue, forKey: .whenTrue)
+                try nested.encode(criteria.whenFalse, forKey: .whenFalse)
+            case .gemini:
+                var nested = container.nestedContainer(keyedBy: GeminiBinaryCriteriaKeys.self, forKey: .criteria)
                 try nested.encode(criteria.whenTrue, forKey: .whenTrue)
                 try nested.encode(criteria.whenFalse, forKey: .whenFalse)
             }
         case .choice(let instructions, let options):
             try container.encode(instructions, forKey: .instructions)
-            var criteria: [String: String?] = [:]
-            for option in options {
-                criteria[option.name] = .some(option.description)
+            switch dialect {
+            case .systemOne:
+                var criteria: [String: String?] = [:]
+                for option in options {
+                    criteria[option.name] = .some(option.description)
+                }
+                try container.encode(criteria, forKey: .criteria)
+            case .gemini:
+                var criteria: [String: String] = [:]
+                for option in options {
+                    criteria[option.name] = option.description ?? ""
+                }
+                try container.encode(criteria, forKey: .criteria)
             }
-            try container.encode(criteria, forKey: .criteria)
         case .score(let instructions, let levels):
             try container.encode(instructions, forKey: .instructions)
             try container.encode(levels, forKey: .criteria)

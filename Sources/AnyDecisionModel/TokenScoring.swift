@@ -48,12 +48,13 @@ enum TokenScoring {
     ///   - question: The question.
     ///   - optionOrder: For choice questions, the order in which to list the options,
     ///     as indices into the question's options. Pass `nil` for the question's order.
+    /// - Throws: ``DecisionError/unsupportedState(_:)`` if the state has attachments.
     static func userMessage(
         state: DecisionState,
         question: Question,
         optionOrder: [Int]? = nil
-    ) -> String {
-        "State:\n\(state.jsonValue.promptText)\n\n\(questionText(question, optionOrder: optionOrder))"
+    ) throws -> String {
+        "State:\n\(try state.textOrJSONValue().promptText)\n\n\(questionText(question, optionOrder: optionOrder))"
     }
 
     static func questionText(_ question: Question, optionOrder: [Int]?) -> String {

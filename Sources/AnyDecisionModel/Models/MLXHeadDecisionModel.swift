@@ -406,7 +406,7 @@ import Foundation
             }
             let tokenizer = await tokenizer(from: container)
             try Task.checkCancellation()
-            let tokens = Head.prefixTokens(for: state) { tokenizer.encode(text: $0, addSpecialTokens: false) }
+            let tokens = try Head.prefixTokens(for: state) { tokenizer.encode(text: $0, addSpecialTokens: false) }
             prefixTokens.withLock { $0 = (state, tokens) }
             return tokens
         }

@@ -32,7 +32,7 @@ a probability for each option, and a confidence value.
 `anger` is a `Score` with the expected level,
 a probability for each level, and a confidence value.
 
-Six backends are available:
+Seven backends are available:
 
 - [x] [MLX](#mlx) runs a small language model on Apple silicon
   and reads each decision from next-token probabilities in one forward pass.
@@ -45,11 +45,13 @@ Six backends are available:
 - [x] [Ollama](#ollama) calls a System One model in
   [Ollama](https://docs.ollama.com/capabilities/decision),
   locally or in Ollama's cloud.
+- [x] [Gemini](#gemini) calls Google's
+  [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
 
 ## Requirements
 
 - Swift 6.2+
-- macOS 26+ / iOS 26+ / Linux (core library, Jev, and Ollama backends only)
+- macOS 26+ / iOS 26+ / Linux (core library, Jev, Ollama, and Gemini backends only)
 - Ollama: Ollama v0.35.0 or later (v0.40.5 or later for cloud models)
 - MLX: Apple silicon and the Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`)
@@ -67,7 +69,7 @@ dependencies: [
 ```
 
 Without traits, the package has no third-party dependencies
-and provides the core types and the Jev and Ollama backends.
+and provides the core types and the Jev, Ollama, and Gemini backends.
 Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
 ```swift
@@ -82,7 +84,13 @@ Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
 ### Sessions and questions
 
-A `DecisionSession` holds one immutable state, which can be text or JSON.
+A `DecisionSession` holds one immutable state,
+which can be text, JSON, or a list of segments of text and attachments.
+Attachments are images, audio, video, and documents,
+from data or a URL, each with a MIME type.
+Only the Gemini backend reads attachments;
+the other backends throw `DecisionError.unsupportedState` for a state with attachments,
+and a session throws that error before the model does any work.
 Every question is about that state, and questions are independent:
 an answer never becomes input to a later question.
 Call `prewarm()` to load the model and process the state before the first question.
@@ -294,6 +302,58 @@ Ollama's probabilities and confidence values are returned unchanged.
 If the server rounds the probabilities,
 they can sum to slightly more or less than 1.
 
+### Gemini
+
+`GeminiDecisionModel` sends each batch to `POST /v1beta/decisions`
+on the [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
+The API key comes from `GEMINI_API_KEY`, or you can pass it to the initializer:
+
+```swift
+let model = GeminiDecisionModel()
+let session = DecisionSession(model: model, state: .text(ticket))
+let urgent = try await session.probability(of: "Does this convey urgency?")
+```
+
+The model defaults to `gemini-decision-1`.
+A text state is sent as the input text,
+and a JSON state is sent as compact JSON text with sorted keys.
+A request can have at most 1,000 questions,
+a choice must have 2 to 255 options,
+and a score must have 2 to 255 non-empty levels.
+The model checks these limits and Gemini's rules for option names before it sends a request.
+If Gemini blocks the input, the model throws `DecisionError.inputBlocked`.
+
+To ask about images, audio, video, or PDF documents,
+pass a state of text and attachment segments:
+
+```swift
+let state = DecisionState.segments([
+    .text("A photo from a customer's damage claim:"),
+    .attachment(DecisionState.Attachment(imageData: jpeg, mimeType: "image/jpeg")),
+    .attachment(DecisionState.Attachment(documentURL: receiptURL)),
+])
+let session = DecisionSession(model: GeminiDecisionModel(), state: state)
+let damaged = try await session.probability(of: "Is the item damaged?")
+```
+
+The model sends the segments in order as Gemini content blocks.
+Gemini joins adjacent text blocks with no separator,
+so the model joins adjacent text segments with a newline.
+Attachment URLs must use HTTPS,
+and the model checks MIME types against Gemini's documented types,
+which include only PDF for documents.
+Inline data can total at most 100 MB in one request, and each inline PDF can be at most 50 MB.
+The model rejects an empty input, including text with only whitespace,
+and an attachment with no data.
+Only Gemini checks the context window and the sizes of files at URLs.
+
+Gemini's probabilities and confidence values are returned unchanged.
+Gemini clamps the probability of a binary answer to 0.01 through 0.99,
+so a binary answer is never 0 or 1.
+Gemini also returns a confidence value for binary answers,
+which the model drops because `Answer.binary` has no confidence value.
+The model does not retry failed requests.
+
 ## Calibration and confidence
 
 Raw probabilities from language models are often overconfident.
@@ -318,7 +378,7 @@ This measures how concentrated the distribution is,
 not the probability that the answer is correct.
 The model can be confident and wrong,
 so measure the error rate on your own data before you choose a threshold.
-Jev and other System One servers compute confidence with their own formulas,
+Jev, other System One servers, and Gemini compute confidence with their own formulas,
 so do not compare confidence values between backends.
 
 Each local answer also reports an allowed-answer mass in `DecisionSession.Diagnostics`:
@@ -327,7 +387,8 @@ A low value means that the model wanted to reply with something else.
 
 ## Limitations
 
-- Wire compatibility with Jev and Ollama is tested against fixtures, not live services.
+- Wire compatibility with Jev, Ollama, and Gemini is tested against fixtures, not live services.
+  A live Gemini test runs when `GEMINI_API_KEY` is set.
 - Calibration was fitted on two tasks.
   Whether it transfers to other tasks is untested.
 - Do not rely on typed output alone to resist injected instructions.

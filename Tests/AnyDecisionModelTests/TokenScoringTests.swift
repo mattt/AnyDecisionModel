@@ -237,10 +237,10 @@ struct TokenScoringTests {
         #expect(legend == ["Calm", "Frustrated", "Very angry"])
     }
 
-    @Test func promptPutsStateBeforeQuestion() {
+    @Test func promptPutsStateBeforeQuestion() throws {
         let state = DecisionState.text("I flipped a coin.")
-        let a = TokenScoring.userMessage(state: state, question: .binary(instructions: "Heads?"))
-        let b = TokenScoring.userMessage(
+        let a = try TokenScoring.userMessage(state: state, question: .binary(instructions: "Heads?"))
+        let b = try TokenScoring.userMessage(
             state: state,
             question: .choice(instructions: "Which side?", options: [ChoiceOption("heads"), ChoiceOption("tails")])
         )
@@ -250,17 +250,17 @@ struct TokenScoringTests {
         #expect(b.contains("A. heads\nB. tails"))
     }
 
-    @Test func promptRendersOptionRotationAndCriteria() {
+    @Test func promptRendersOptionRotationAndCriteria() throws {
         let question = Question.choice(
             instructions: "Route.",
             options: [
                 ChoiceOption("billing", description: "payments"), ChoiceOption("sales"), ChoiceOption("technical"),
             ]
         )
-        let rotated = TokenScoring.userMessage(state: "s", question: question, optionOrder: [1, 2, 0])
+        let rotated = try TokenScoring.userMessage(state: "s", question: question, optionOrder: [1, 2, 0])
         #expect(rotated.contains("A. sales\nB. technical\nC. billing: payments"))
 
-        let binary = TokenScoring.userMessage(
+        let binary = try TokenScoring.userMessage(
             state: "s",
             question: .binary(instructions: "Urgent?", criteria: BinaryCriteria(whenTrue: "today", whenFalse: "later"))
         )

@@ -425,7 +425,7 @@ import Foundation
 
                 for order in plan.rotations {
                     try Task.checkCancellation()
-                    let user = TokenScoring.userMessage(
+                    let user = try TokenScoring.userMessage(
                         state: state,
                         question: plan.question,
                         optionOrder: order

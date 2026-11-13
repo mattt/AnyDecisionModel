@@ -202,8 +202,8 @@ import Foundation
         ///
         /// The prefix covers the system prompt and the state.
         func prefixTokens(for state: DecisionState, tokenizer: any Tokenizer) throws -> [Int] {
-            let probeA = TokenScoring.userMessage(state: state, question: .binary(instructions: "A"))
-            let probeB = TokenScoring.userMessage(state: state, question: .binary(instructions: "Z"))
+            let probeA = try TokenScoring.userMessage(state: state, question: .binary(instructions: "A"))
+            let probeB = try TokenScoring.userMessage(state: state, question: .binary(instructions: "Z"))
             let tokensA = try promptTokens(user: probeA, tokenizer: tokenizer)
             let tokensB = try promptTokens(user: probeB, tokenizer: tokenizer)
             let shared = zip(tokensA, tokensB).prefix { $0 == $1 }.count
@@ -411,7 +411,7 @@ import Foundation
                 for order in plan.rotations {
                     try Task.checkCancellation()
                     let start = ContinuousClock.now
-                    let user = TokenScoring.userMessage(state: state, question: plan.question, optionOrder: order)
+                    let user = try TokenScoring.userMessage(state: state, question: plan.question, optionOrder: order)
                     let tokens: [Int]
                     do {
                         tokens = try model.promptTokens(user: user, tokenizer: tokenizer)

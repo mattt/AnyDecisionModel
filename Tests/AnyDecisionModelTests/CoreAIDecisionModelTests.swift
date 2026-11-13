@@ -331,7 +331,7 @@ import Testing
             fallback.closedThinkFallback = true
 
             let tokenizer = try await original.loadDecider().tokenizer
-            let user = TokenScoring.userMessage(state: .text(ticket), question: questions[0])
+            let user = try TokenScoring.userMessage(state: .text(ticket), question: questions[0])
             let originalTokens = try original.promptTokens(user: user, tokenizer: tokenizer)
             let fallbackTokens = try fallback.promptTokens(user: user, tokenizer: tokenizer)
 

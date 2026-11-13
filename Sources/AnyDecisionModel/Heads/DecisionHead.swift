@@ -26,7 +26,9 @@ import Foundation
         static func load(from directory: URL) throws -> Self
 
         /// Returns the tokens that every prompt about a state starts with.
-        static func prefixTokens(for state: DecisionState, encode: (String) -> [Int]) -> [Int]
+        ///
+        /// - Throws: ``DecisionError/unsupportedState(_:)`` if the head can't read the state.
+        static func prefixTokens(for state: DecisionState, encode: (String) -> [Int]) throws -> [Int]
 
         /// Returns the tokens that follow the prefix in the prompt for a question,
         /// and what the head reads from them.

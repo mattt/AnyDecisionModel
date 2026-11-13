@@ -46,9 +46,10 @@ enum JointSchemaEncoding {
     /// - Parameters:
     ///   - state: The state.
     ///   - encode: A function that tokenizes text without adding special tokens.
-    static func prefixTokens(for state: DecisionState, encode: (String) -> [Int]) -> [Int] {
+    /// - Throws: ``DecisionError/unsupportedState(_:)`` if the state has attachments.
+    static func prefixTokens(for state: DecisionState, encode: (String) -> [Int]) throws -> [Int] {
         encode("<|im_start|>system\n\(systemPrompt)<|im_end|>\n<|im_start|>user\nSTATE:\n")
-            + encode(render(state.jsonValue))
+            + encode(render(try state.textOrJSONValue()))
             + encode("\n\nSCHEMA FIELDS:\n")
     }
 
