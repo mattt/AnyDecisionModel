@@ -255,6 +255,8 @@ The model retries HTTP 429, 503, and 529 with exponential backoff
 and honors `Retry-After`;
 pass `retryPolicy: .never` to disable retries.
 Jev's probabilities and confidence values are returned unchanged.
+If the server rounds the probabilities,
+they can sum to slightly more or less than 1.
 
 The model works with any server that implements the System One API,
 such as [Kev](https://github.com/jaredpalmer/kev)
@@ -289,6 +291,8 @@ and point `baseURL:` at `https://ollama.com`,
 or add `:cloud` to the model name to go through a local server.
 Pass `keepAlive:` to control how long the model stays loaded, in seconds.
 Ollama's probabilities and confidence values are returned unchanged.
+If the server rounds the probabilities,
+they can sum to slightly more or less than 1.
 
 ## Calibration and confidence
 

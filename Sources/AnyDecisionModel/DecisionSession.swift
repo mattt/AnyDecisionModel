@@ -254,11 +254,14 @@ extension DecisionSession {
 extension DecisionSession.Response {
     /// Checks that the response answers every question with a well-formed answer.
     ///
-    /// - Parameters:
-    ///   - questions: The questions that the request asked.
-    ///   - tolerance: The allowed difference between the probability total and 1.
+    /// A choice or score distribution can sum to a value near 1
+    /// that a rounding of each probability explains;
+    /// ``Answer/totalTolerance(count:)`` describes the rule.
+    /// The response keeps those probabilities unchanged.
+    ///
+    /// - Parameter questions: The questions that the request asked.
     /// - Throws: ``DecisionError/invalidResponse(_:)`` for the first problem found.
-    func validate(against questions: [Question], tolerance: Double = 0.01) throws {
+    func validate(against questions: [Question]) throws {
         guard answers.count == questions.count else {
             throw DecisionError.invalidResponse(
                 "Expected \(questions.count) answers, got \(answers.count)."
@@ -270,7 +273,7 @@ extension DecisionSession.Response {
             )
         }
         for (index, (question, answer)) in zip(questions, answers).enumerated() {
-            try answer.validate(for: question, index: index, tolerance: tolerance)
+            try answer.validate(for: question, index: index)
         }
     }
 }

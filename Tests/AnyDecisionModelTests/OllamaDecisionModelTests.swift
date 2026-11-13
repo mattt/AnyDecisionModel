@@ -175,4 +175,87 @@ struct OllamaDecisionModelTests {
             _ = try await session.probability(of: "Is this urgent?")
         }
     }
+
+    @Test func returnsRoundedProbabilitiesUnchanged() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(
+            json: """
+                {"model": "nimble",
+                 "answers": {
+                   "0": {"type": "score", "score": 1.12,
+                         "probabilities": {"0": 0.03, "1": 0.83, "2": 0.15},
+                         "confidence": 0.61},
+                   "1": {"type": "choice", "choice": "bug",
+                         "probabilities": {"billing": 0.03, "bug": 0.83, "account": 0.15},
+                         "confidence": 0.61}
+                 },
+                 "usage": {"input_tokens": 200, "output_tokens": 2}}
+                """
+        )
+        let session = DecisionSession(model: makeModel(host), state: "ticket")
+
+        let response = try await session.decide([
+            .score(instructions: "How urgent is this?", levels: ["Routine", "Soon", "Immediate"]),
+            .choice(
+                instructions: "Which label fits this ticket?",
+                options: [ChoiceOption("billing"), ChoiceOption("bug"), ChoiceOption("account")]
+            ),
+        ])
+
+        #expect(
+            response.answers == [
+                .score(value: 1.12, probabilities: [0.03, 0.83, 0.15], confidence: 0.61),
+                .choice(
+                    name: "bug",
+                    probabilities: ["billing": 0.03, "bug": 0.83, "account": 0.15],
+                    confidence: 0.61
+                ),
+            ]
+        )
+    }
+
+    @Test func returnsRoundedScoreUnchanged() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(
+            json: """
+                {"model": "nimble",
+                 "answers": {
+                   "0": {"type": "score", "score": 1.12,
+                         "probabilities": {"0": 0.03, "1": 0.83, "2": 0.15},
+                         "confidence": 0.61}
+                 },
+                 "usage": {"input_tokens": 200, "output_tokens": 2}}
+                """
+        )
+        let session = DecisionSession(model: makeModel(host), state: "ticket")
+
+        let score = try await session.score("How urgent is this?", levels: ["Routine", "Soon", "Immediate"])
+
+        #expect(score.value == 1.12)
+        #expect(score.probabilities == [0.03, 0.83, 0.15])
+        #expect(score.confidence == 0.61)
+        #expect(score.mostLikelyLevelIndex == 1)
+    }
+
+    @Test func rejectsProbabilitiesFarFromOne() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(
+            json: """
+                {"model": "nimble",
+                 "answers": {
+                   "0": {"type": "score", "score": 1.12,
+                         "probabilities": {"0": 0.25, "1": 0.75, "2": 0.5},
+                         "confidence": 0.61}
+                 },
+                 "usage": {"input_tokens": 200, "output_tokens": 2}}
+                """
+        )
+        let session = DecisionSession(model: makeModel(host), state: "ticket")
+
+        await #expect(
+            throws: DecisionError.invalidResponse("Question at index 0: The probabilities sum to 1.5, not 1.")
+        ) {
+            _ = try await session.score("How urgent is this?", levels: ["Routine", "Soon", "Immediate"])
+        }
+    }
 }
