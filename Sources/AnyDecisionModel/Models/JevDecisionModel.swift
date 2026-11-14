@@ -90,7 +90,7 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     }
 
     public func makeExecutor() -> any DecisionModelExecutor {
-        base.makeExecutor()
+        base.makeExecutor(readsCustomOptions: false)
     }
 }
 

@@ -412,7 +412,7 @@ struct GeminiDecisionModelTests {
                 reason: "Gemini accepts at most 1000 questions in one request, not 1001."
             )
         ) {
-            _ = try await executor.decide(questions, about: "state")
+            _ = try await executor.decide(DecisionRequest(state: "state", questions: questions))
         }
         #expect(host.recorded.isEmpty)
     }
@@ -422,7 +422,7 @@ struct GeminiDecisionModelTests {
         let executor = makeModel(host).makeExecutor()
         let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
         await #expect(throws: DecisionError.unsupportedState("Gemini does not accept empty input.")) {
-            _ = try await executor.decide(questions, about: "  ")
+            _ = try await executor.decide(DecisionRequest(state: "  ", questions: questions))
         }
         #expect(host.recorded.isEmpty)
     }

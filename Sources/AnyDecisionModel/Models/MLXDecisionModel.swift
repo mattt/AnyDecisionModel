@@ -272,9 +272,9 @@ import Foundation
             }
         }
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let questions = request.questions
+            let state = request.state
             let container = try await model.loadContainer()
             let tokenizer = await tokenizer(from: container)
 

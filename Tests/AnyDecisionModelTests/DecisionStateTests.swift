@@ -245,7 +245,9 @@ struct UnsupportedAttachmentTests {
             : OllamaDecisionModel(modelID: "nimble", baseURL: host.baseURL, session: StubURLProtocol.makeSession())
 
         do {
-            _ = try await model.makeExecutor().decide([.binary(instructions: "Is this urgent?")], about: state)
+            _ = try await model.makeExecutor().decide(
+                DecisionRequest(state: state, questions: [.binary(instructions: "Is this urgent?")])
+            )
             Issue.record("Expected an error.")
         } catch DecisionError.unsupportedState {
         }

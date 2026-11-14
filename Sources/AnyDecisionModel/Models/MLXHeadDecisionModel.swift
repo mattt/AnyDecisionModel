@@ -349,9 +349,9 @@ import Foundation
             }
         }
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let questions = request.questions
+            let state = request.state
             let loaded = try await model.load(Head.self)
             let start = ContinuousClock.now
             let prefixTokens = try await prefixTokens(for: state, container: loaded.container)

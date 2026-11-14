@@ -192,6 +192,33 @@ and the kinds of attachments it reads.
 The session checks each batch against them before the model does any work,
 and `capabilities.validate(_:about:)` does the same check without a session.
 
+### Request options
+
+A session sends a `DecisionOptions` value with each request.
+Pass options to the session's initializer to use them for every request,
+or pass `options:` to `decide`, `probability(of:)`, `choice`, or `score` for one call.
+The options of a call replace the session's options for that call;
+the two values are not merged.
+
+```swift
+var options = DecisionOptions(cacheKey: "triage-v2", userID: hashedAccountID)
+options[custom: SystemOneDecisionModel.self] = .init(
+    extraBody: ["session_id": "triage-7"]
+)
+let session = DecisionSession(model: model, state: .text(ticket), options: options)
+
+let urgent = try await session.probability(of: "Does this convey urgency?")
+let team = try await session.choice("Which team?", from: Department.self, options: DecisionOptions())
+```
+
+`cacheKey` and `userID` are hints that a backend can ignore without a change to an answer.
+No backend in this package reads them yet.
+An option that changes answers or routing is specific to one type of model.
+Set it with the `options[custom:]` subscript, keyed by the model type.
+Only an executor of that type reads it,
+and the subscript returns `nil` for a type that has no value.
+A model without custom options has `Never` as its `CustomOptions` type.
+
 ## Backends
 
 ### MLX
@@ -368,6 +395,29 @@ The session checks each batch against `capabilities` before it sends a request.
 and `headers` cannot set `Authorization` or `Content-Type`;
 the initializer throws `SystemOneDecisionModel.ConfigurationError`,
 which names the key, if they do.
+These headers and body fields are the model's defaults.
+A request can add to them or override them with
+`options[custom: SystemOneDecisionModel.self]`,
+which holds `extraBody` and `extraHeaders`:
+
+```swift
+var options = DecisionOptions()
+options[custom: SystemOneDecisionModel.self] = .init(
+    extraBody: ["cache_salt": "tenant-2"],
+    extraHeaders: ["traceparent": requestTraceparent]
+)
+let urgent = try await session.probability(of: "Does this convey urgency?", options: options)
+```
+
+A request option overrides a default with the same top-level body key,
+or a header with the same name in any letter case.
+The other defaults stay.
+Request options have the same reserved keys,
+and the request throws `SystemOneDecisionModel.ConfigurationError` before it is sent if one is set.
+Every `SystemOneDecisionModel` reads the same request options,
+so put a field that belongs to one server, such as provider routing, on the model.
+`JevDecisionModel` and `OllamaDecisionModel` have no custom options
+and ignore the options for `SystemOneDecisionModel`.
 The model retries like the Jev model; pass `retryPolicy: .never` to disable retries.
 It sends text and JSON states only.
 
@@ -430,6 +480,46 @@ so a binary answer is never 0 or 1.
 Gemini also returns a confidence value for binary answers,
 which the model drops because `Answer.binary` has no confidence value.
 The model does not retry failed requests.
+
+### Custom backends
+
+To add a backend, conform a type to `DecisionModel`
+and return an executor that conforms to `DecisionModelExecutor`.
+The executor gets each batch as a `DecisionRequest`,
+which holds the state, the questions, and the options:
+
+```swift
+struct MyDecisionModel: DecisionModel {
+    struct CustomOptions: CustomDecisionOptions {
+        var temperature: Double?
+    }
+
+    var modelID: String { "my-model" }
+    var capabilities: DecisionCapabilities { DecisionCapabilities() }
+
+    func makeExecutor() -> any DecisionModelExecutor { Executor() }
+
+    struct Executor: DecisionModelExecutor {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let temperature = request.options[custom: MyDecisionModel.self]?.temperature
+            // Answer request.questions about request.state.
+        }
+    }
+}
+```
+
+Omit `CustomOptions` if the model has no options of its own.
+
+To migrate an executor from version 0.9,
+replace `decide(_ questions: [Question], about state: DecisionState)`
+with `decide(_ request: DecisionRequest)`,
+and read `request.questions` and `request.state`.
+The package has no adapter between the two requirements,
+so an executor with the old method no longer conforms.
+Callers need no change:
+each `DecisionSession` method and the initializer keep their 0.9 signatures,
+which use the session's options,
+so calls and references to them as function values compile unchanged.
 
 ## Calibration and confidence
 

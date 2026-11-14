@@ -23,9 +23,8 @@ struct FixedDecisionModel: DecisionModel {
             model.prewarmed.withLock { $0.append(state) }
         }
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let questions = request.questions
             model.calls.withLock { $0.append(questions) }
             let answers = questions.map { question in
                 let binary = if case .binary = question { true } else { false }
