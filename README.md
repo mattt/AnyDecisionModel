@@ -32,23 +32,55 @@ a probability for each option, and a confidence value.
 `anger` is a `Score` with the expected level,
 a probability for each level, and a confidence value.
 
-Eight backends are available:
+Decision models have no single API.
+The package supports two wire formats and two local methods.
 
-- [x] [MLX](#mlx) runs a small language model on Apple silicon
-  and reads each decision from next-token probabilities in one forward pass.
-- [x] [MLX decision heads](#mlx-decision-heads) run a model with a trained decision head,
-  such as Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef).
-- [x] [Core AI](#core-ai) does the same as MLX with a Core AI model on macOS 27 and iOS 27.
-- [x] [llama.cpp](#llamacpp) does the same as MLX with a GGUF model through llama.cpp.
-- [x] [Jev](#jev) calls TypeSafe's Jev through the [System One API](https://docs.typesafe.ai/api),
-  or any server that implements the same API.
-- [x] [Ollama](#ollama) calls a System One model in
+**System One** is the wire format of TypeSafe's
+[System One API](https://docs.typesafe.ai/api):
+a `POST /v1/systemone` request with a `state`
+and a map of named `noul` (yes-or-no), `choice`, and `score` questions.
+Three backends send it:
+
+- [Jev](#jev) calls TypeSafe's Jev.
+- [Ollama](#ollama) calls a decision model in
   [Ollama](https://docs.ollama.com/capabilities/decision),
   locally or in Ollama's cloud.
-- [x] [System One](#system-one) calls any server that implements the System One API,
+- [System One](#system-one) calls any other server that implements the format,
   with a configurable path, headers, limits, and request fields.
-- [x] [Gemini](#gemini) calls Google's
-  [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
+
+System One also has `box` questions, which locate a region of an image.
+The package does not send them.
+
+**Gemini Decisions** is the format of Google's
+[Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
+The [Gemini](#gemini) backend sends it,
+and is the only backend that reads images, audio, video, and documents.
+
+**Next-token scoring** runs a small language model on the device
+and reads each decision from next-token probabilities in one forward pass.
+[MLX](#mlx) does this on Apple silicon,
+[Core AI](#core-ai) with a Core AI model on macOS 27 and iOS 27,
+and [llama.cpp](#llamacpp) with a GGUF model.
+
+**Decision heads** are trained output layers that a model carries for decisions.
+[MLX decision heads](#mlx-decision-heads) run such a model,
+such as Cloudflare's [Clef](https://huggingface.co/Cloudflare/clef).
+
+Other providers document System One routes:
+[vLLM](https://docs.vllm.ai/en/v0.32.0/serving/online_serving/structured_decisions/)
+and [SGLang](https://lmsysorg.mintlify.app/docs/supported-models/decision_models.md)
+at `/v1/systemone`,
+[Liquid](https://www.liquid.ai/en/api) at `/decisions/v1/systemone`,
+and [OpenRouter](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request.md)
+at `/api/alpha/decisions`, which its documentation marks as alpha.
+The package is not tested against them.
+To try one, set the path and limits of the [System One](#system-one) backend.
+
+The package has no backend for two other interfaces:
+OpenAI's [Decisions API](https://developers.openai.com/api/reference/go/resources/decisions/index.md),
+which has its own format with `predicate`, `choice`, and `score` questions,
+and Google's on-device
+[MediaPipe Decision Maker](https://developers.google.com/edge/mediapipe/solutions/decision/decision_maker).
 
 ## Requirements
 
