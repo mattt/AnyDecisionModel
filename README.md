@@ -57,7 +57,7 @@ The [Gemini](#gemini) backend sends it,
 and is the only backend that reads images, audio, video, and documents.
 
 **Next-token scoring** runs a small language model on the device
-and reads each decision from next-token probabilities in one forward pass.
+and reads each decision from the next-token probabilities of the allowed answers.
 [MLX](#mlx) does this on Apple silicon,
 [Core AI](#core-ai) with a Core AI model on macOS 27 and iOS 27,
 and [llama.cpp](#llamacpp) with a GGUF model.
