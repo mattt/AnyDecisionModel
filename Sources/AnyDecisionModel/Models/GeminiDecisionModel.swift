@@ -108,9 +108,9 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     private struct Executor: DecisionModelExecutor {
         let model: GeminiDecisionModel
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let questions = request.questions
+            let state = request.state
             try GeminiDecisionModel.check(state)
             try GeminiDecisionModel.check(questions)
 

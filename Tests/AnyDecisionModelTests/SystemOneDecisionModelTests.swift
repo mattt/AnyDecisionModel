@@ -704,3 +704,161 @@ struct SystemOneDecisionModelTests {
         )
     }
 }
+
+// MARK: - Request options
+
+extension SystemOneDecisionModelTests {
+    private func systemOneOptions(
+        extraBody: [String: JSONValue] = [:],
+        extraHeaders: [String: String] = [:]
+    ) -> DecisionOptions {
+        var options = DecisionOptions()
+        options[custom: SystemOneDecisionModel.self] = .init(extraBody: extraBody, extraHeaders: extraHeaders)
+        return options
+    }
+
+    @Test func requestOptionsOverrideDefaultsWithSameKey() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let model = try makeModel(
+            host,
+            headers: ["X-Title": "Example", "traceparent": "00-default-01"],
+            extraBody: ["keep_alive": 300, "provider": ["order": ["a"]]]
+        )
+        let session = DecisionSession(model: model, state: "ticket")
+
+        _ = try await session.decide(
+            [.binary(instructions: "Is this urgent?")],
+            options: systemOneOptions(
+                extraBody: ["provider": ["order": ["b"]], "session_id": "s-1"],
+                extraHeaders: ["traceparent": "00-request-01"]
+            )
+        )
+
+        let recorded = try #require(host.recorded.first)
+        let body = try requestBody(recorded)
+        #expect(body["keep_alive"] as? Int == 300)
+        #expect((body["provider"] as? [String: Any])?["order"] as? [String] == ["b"])
+        #expect(body["session_id"] as? String == "s-1")
+        #expect(body["model"] as? String == "my-model")
+        let headers = Dictionary(uniqueKeysWithValues: recorded.headers.map { ($0.key.lowercased(), $0.value) })
+        #expect(headers["x-title"] == "Example")
+        #expect(headers["traceparent"] == "00-request-01")
+    }
+
+    @Test func sessionOptionsReachSystemOneRequest() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(
+            model: try makeModel(host),
+            state: "ticket",
+            options: systemOneOptions(extraBody: ["session_id": "s-2"])
+        )
+
+        _ = try await session.probability(of: "Is this urgent?")
+
+        let body = try requestBody(try #require(host.recorded.first))
+        #expect(body["session_id"] as? String == "s-2")
+    }
+
+    @Test func requestHeaderReplacesDefaultHeaderInAnyCase() throws {
+        var body: [String: JSONValue] = [:]
+        var headers = ["X-Trace": "default", "X-Title": "Example"]
+        let options = SystemOneDecisionModel.CustomOptions(extraHeaders: ["x-trace": "request"])
+
+        try options.apply(to: &body, headers: &headers)
+
+        #expect(headers == ["x-trace": "request", "X-Title": "Example"])
+    }
+
+    @Test func requestHeaderInOtherCaseReachesServer() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(model: try makeModel(host, headers: ["X-Trace": "default"]), state: "ticket")
+
+        _ = try await session.decide(
+            [.binary(instructions: "Is this urgent?")],
+            options: systemOneOptions(extraHeaders: ["x-trace": "request"])
+        )
+
+        let recorded = try #require(host.recorded.first)
+        let traces = recorded.headers.filter { $0.key.lowercased() == "x-trace" }
+        #expect(traces.map(\.value) == ["request"])
+    }
+
+    @Test(arguments: ["model", "state", "questions"])
+    func requestOptionsRejectReservedBodyFieldBeforeRequest(key: String) async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
+
+        await #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: key)) {
+            _ = try await session.decide(
+                [.binary(instructions: "Is this urgent?")],
+                options: systemOneOptions(extraBody: [key: "x", "seed": 1])
+            )
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test(arguments: ["Authorization", "authorization", "Content-Type", "CONTENT-TYPE"])
+    func requestOptionsRejectReservedHeaderBeforeRequest(name: String) async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(model: try makeModel(host, apiKey: "secret"), state: "ticket")
+
+        await #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedHeader, key: name)) {
+            _ = try await session.decide(
+                [.binary(instructions: "Is this urgent?")],
+                options: systemOneOptions(extraHeaders: [name: "x", "traceparent": "y"])
+            )
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func requestOptionsForAnotherModelTypeAreIgnored() async throws {
+        var options = DecisionOptions(cacheKey: "c", userID: "u")
+        options[custom: ThresholdDecisionModel.self] = .init(probability: 0.9)
+        let build = { (host: StubURLProtocol.Host) -> any DecisionModel in
+            try! makeModel(host, headers: ["X-Title": "Example"], extraBody: ["keep_alive": 300])
+        }
+        let questions: [Question] = [.binary(instructions: "Is this urgent?")]
+        let plain = try await record(questions, about: "ticket", with: build)
+
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: #"{"model": "m", "answers": {}}"#)
+        _ = try? await DecisionSession(model: build(host), state: "ticket", options: options).decide(questions)
+        let withOptions = try #require(host.recorded.first)
+
+        #expect(withOptions.body == plain.body)
+        #expect(withOptions.headers == plain.headers)
+    }
+
+    @Test(arguments: 0 ..< batches.count)
+    func jevAndOllamaIgnoreSystemOneRequestOptions(index: Int) async throws {
+        let (state, questions) = Self.batches[index]
+        let options = systemOneOptions(extraBody: ["seed": 1], extraHeaders: ["X-Title": "Example"])
+        let builders: [(StubURLProtocol.Host) -> any DecisionModel] = [
+            { host in JevDecisionModel(baseURL: host.baseURL, apiKey: "key", session: StubURLProtocol.makeSession()) },
+            { host in
+                OllamaDecisionModel(
+                    modelID: "nimble",
+                    baseURL: host.baseURL,
+                    apiKey: "key",
+                    keepAlive: 300,
+                    session: StubURLProtocol.makeSession()
+                )
+            },
+        ]
+        for build in builders {
+            let plain = try await record(questions, about: state, with: build)
+            let host = StubURLProtocol.Host()
+            host.enqueue(json: #"{"model": "m", "answers": {}}"#)
+            _ = try? await DecisionSession(model: build(host), state: state, options: options).decide(questions)
+            let withOptions = try #require(host.recorded.first)
+
+            #expect(withOptions.body == plain.body)
+            #expect(withOptions.headers == plain.headers)
+        }
+    }
+}

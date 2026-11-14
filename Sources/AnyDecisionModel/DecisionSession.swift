@@ -5,6 +5,11 @@ import Foundation
 /// Create a session with a model and a state, then ask questions.
 /// Questions are independent: answers never become history for later questions.
 ///
+/// A session sends its ``options`` with every request.
+/// To use other options for one call, pass `options:` to that call.
+/// The value replaces the session's options for the call;
+/// the two values are not merged.
+///
 /// ```swift
 /// let model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
 /// let session = DecisionSession(model: model, state: .text(ticket))
@@ -19,6 +24,10 @@ public final class DecisionSession: Sendable {
     /// The state that every question is about.
     public let state: DecisionState
 
+    /// The options that the session sends with each request
+    /// that does not pass its own options.
+    public let options: DecisionOptions
+
     private let executor: any DecisionModelExecutor
 
     /// Creates a session.
@@ -26,9 +35,12 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - model: The model that answers the questions.
     ///   - state: The state that every question is about.
-    public init(model: any DecisionModel, state: DecisionState) {
+    ///   - options: The options to send with each request
+    ///     that does not pass its own options.
+    public init(model: any DecisionModel, state: DecisionState, options: DecisionOptions = DecisionOptions()) {
         self.model = model
         self.state = state
+        self.options = options
         self.executor = model.makeExecutor()
     }
 
@@ -67,30 +79,39 @@ public final class DecisionSession: Sendable {
     /// The session checks the batch against the model's ``DecisionModel/capabilities``
     /// before it asks the model to do any work.
     ///
-    /// - Parameter questions: The questions.
+    /// - Parameters:
+    ///   - questions: The questions.
+    ///   - options: The options for this request,
+    ///     or `nil` to use the session's ``options``.
+    ///     A value replaces the session's options; the two are not merged.
     /// - Returns: A response with one answer for each question, in the order of the questions.
     /// - Throws: ``DecisionError`` if a question is invalid, the batch exceeds a limit,
     ///   or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
-    public func decide(_ questions: [Question]) async throws -> Response {
+    ///   A backend can also throw its own error for an option that it rejects.
+    public func decide(_ questions: [Question], options: DecisionOptions? = nil) async throws -> Response {
         try validate(questions)
         guard !questions.isEmpty else {
             return Response(modelID: model.modelID, answers: [])
         }
         try Task.checkCancellation()
-        let response = try await executor.decide(questions, about: state)
+        let request = DecisionRequest(state: state, questions: questions, options: options ?? self.options)
+        let response = try await executor.decide(request)
         try response.validate(against: questions)
         return response
     }
 
     /// Answers one question.
     ///
-    /// - Parameter question: The question.
+    /// - Parameters:
+    ///   - question: The question.
+    ///   - options: The options for this request,
+    ///     or `nil` to use the session's ``options``.
     /// - Returns: The answer.
     /// - Throws: ``DecisionError`` if the question is invalid or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
-    public func decide(_ question: Question) async throws -> Answer {
-        try await decide([question]).answers[0]
+    public func decide(_ question: Question, options: DecisionOptions? = nil) async throws -> Answer {
+        try await decide([question], options: options).answers[0]
     }
 
     /// Returns the probability that the answer to a yes-or-no question is "yes".
@@ -98,8 +119,14 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - criteria: Optional descriptions of true and false answers.
-    public func probability(of instructions: String, criteria: BinaryCriteria? = nil) async throws -> Double {
-        let answer = try await decide(.binary(instructions: instructions, criteria: criteria))
+    ///   - options: The options for this request,
+    ///     or `nil` to use the session's ``options``.
+    public func probability(
+        of instructions: String,
+        criteria: BinaryCriteria? = nil,
+        options: DecisionOptions? = nil
+    ) async throws -> Double {
+        let answer = try await decide(.binary(instructions: instructions, criteria: criteria), options: options)
         guard case .binary(let probability) = answer else {
             throw DecisionError.invalidResponse("Expected a binary answer.")
         }
@@ -111,15 +138,19 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - type: The option type. It defaults to the inferred result type.
+    ///   - options: The options for this request,
+    ///     or `nil` to use the session's ``options``.
     public func choice<Option: Choosable>(
         _ instructions: String,
-        from type: Option.Type = Option.self
+        from type: Option.Type = Option.self,
+        options: DecisionOptions? = nil
     ) async throws -> Choice<Option> {
         let cases = Array(Option.allCases)
         return try await choice(
             instructions,
-            options: cases.map { ChoiceOption($0.optionName, description: $0.optionDescription) },
-            values: cases
+            choiceOptions: cases.map { ChoiceOption($0.optionName, description: $0.optionDescription) },
+            values: cases,
+            options: options
         )
     }
 
@@ -127,9 +158,20 @@ public final class DecisionSession: Sendable {
     ///
     /// - Parameters:
     ///   - instructions: The question.
-    ///   - options: The options, in display order.
-    public func choice(_ instructions: String, from options: [ChoiceOption]) async throws -> Choice<String> {
-        try await choice(instructions, options: options, values: options.map(\.name))
+    ///   - choiceOptions: The options to choose from, in display order.
+    ///   - options: The options for this request,
+    ///     or `nil` to use the session's ``options``.
+    public func choice(
+        _ instructions: String,
+        from choiceOptions: [ChoiceOption],
+        options: DecisionOptions? = nil
+    ) async throws -> Choice<String> {
+        try await choice(
+            instructions,
+            choiceOptions: choiceOptions,
+            values: choiceOptions.map(\.name),
+            options: options
+        )
     }
 
     /// Places the state on an ordinal scale.
@@ -137,8 +179,14 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - levels: Level descriptions, from lowest to highest.
-    public func score(_ instructions: String, levels: [String]) async throws -> Score {
-        let answer = try await decide(.score(instructions: instructions, levels: levels))
+    ///   - options: The options for this request,
+    ///     or `nil` to use the session's ``options``.
+    public func score(
+        _ instructions: String,
+        levels: [String],
+        options: DecisionOptions? = nil
+    ) async throws -> Score {
+        let answer = try await decide(.score(instructions: instructions, levels: levels), options: options)
         guard case .score(let value, let probabilities, _, let confidence) = answer else {
             throw DecisionError.invalidResponse("Expected a score answer.")
         }
@@ -148,10 +196,11 @@ public final class DecisionSession: Sendable {
     /// Asks a choice question and pairs each option with a typed value.
     private func choice<Option: Hashable & Sendable>(
         _ instructions: String,
-        options: [ChoiceOption],
-        values: [Option]
+        choiceOptions: [ChoiceOption],
+        values: [Option],
+        options: DecisionOptions?
     ) async throws -> Choice<Option> {
-        let answer = try await decide(.choice(instructions: instructions, options: options))
+        let answer = try await decide(.choice(instructions: instructions, options: choiceOptions), options: options)
         guard case .choice(let name, let probabilities, let confidence) = answer else {
             throw DecisionError.invalidResponse("Expected a choice answer.")
         }
@@ -159,7 +208,7 @@ public final class DecisionSession: Sendable {
             name: name,
             probabilities: probabilities,
             confidence: confidence,
-            options: Array(zip(values, options.map(\.name)))
+            options: Array(zip(values, choiceOptions.map(\.name)))
         )
     }
 }

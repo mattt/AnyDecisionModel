@@ -371,9 +371,9 @@ import Foundation
             let rotations: [[Int]]
         }
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let questions = request.questions
+            let state = request.state
             let decider = try await model.loadDecider()
             let tokenizer = decider.tokenizer
 

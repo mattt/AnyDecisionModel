@@ -10,6 +10,7 @@ import Foundation
 /// with the model identifier, the state,
 /// the questions keyed by their positions,
 /// and the fields in ``extraBody``.
+/// It sends the headers in ``headers``.
 /// The body's object keys are sorted,
 /// so the same request always has the same bytes.
 /// It returns the server's probabilities and confidence values unchanged.
@@ -29,6 +30,23 @@ import Foundation
 /// let urgent = try await session.probability(of: "Does this convey urgency?")
 /// ```
 ///
+/// ``extraBody`` and ``headers`` are the model's defaults.
+/// A request can add to them or override them with ``CustomOptions``:
+///
+/// ```swift
+/// var options = DecisionOptions()
+/// options[custom: SystemOneDecisionModel.self] = .init(
+///     extraBody: ["session_id": "triage-7"],
+///     extraHeaders: ["traceparent": traceparent]
+/// )
+/// let urgent = try await session.probability(of: "Does this convey urgency?", options: options)
+/// ```
+///
+/// A request option overrides a default with the same top-level body key,
+/// or with the same header name in any letter case.
+/// The other defaults stay.
+/// The model does not read ``DecisionOptions/cacheKey`` or ``DecisionOptions/userID``.
+///
 /// An API key is sent only in the `Authorization` header
 /// and is never included in descriptions or errors.
 /// The model sends text and JSON states only;
@@ -39,12 +57,12 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
 
     /// The request body fields that the model writes.
     ///
-    /// ``extraBody`` cannot contain these keys.
+    /// ``extraBody`` and ``CustomOptions/extraBody`` cannot contain these keys.
     public static let reservedBodyFields: Set<String> = ["model", "state", "questions"]
 
     /// The request headers that the model writes.
     ///
-    /// ``headers`` cannot contain these names, in any letter case.
+    /// ``headers`` and ``CustomOptions/extraHeaders`` cannot contain these names, in any letter case.
     public static let reservedHeaders: Set<String> = ["Authorization", "Content-Type"]
 
     /// The API base URL.
@@ -57,12 +75,16 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     public let modelID: String
 
     /// Extra request headers.
+    ///
+    /// A request can override a header with ``CustomOptions/extraHeaders``.
     public let headers: [String: String]
 
     /// The limits and features of the server.
     public let capabilities: DecisionCapabilities
 
     /// Extra top-level fields that the model adds to each request body.
+    ///
+    /// A request can override a field with ``CustomOptions/extraBody``.
     public let extraBody: [String: JSONValue]
 
     /// The retry behavior for eligible HTTP failures.
@@ -189,24 +211,41 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     }
 
     public func makeExecutor() -> any DecisionModelExecutor {
-        Executor(model: self)
+        makeExecutor(readsCustomOptions: true)
+    }
+
+    /// Creates an executor.
+    ///
+    /// - Parameter readsCustomOptions: Whether the executor applies
+    ///   the request's options for `SystemOneDecisionModel`.
+    ///   ``JevDecisionModel`` and ``OllamaDecisionModel`` pass `false`,
+    ///   because their custom options type is `Never`
+    ///   and options for another model type must not reach them.
+    func makeExecutor(readsCustomOptions: Bool) -> any DecisionModelExecutor {
+        Executor(model: self, readsCustomOptions: readsCustomOptions)
     }
 
     private struct Executor: DecisionModelExecutor {
         let model: SystemOneDecisionModel
+        let readsCustomOptions: Bool
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            var extraBody = model.extraBody
+            var headers = model.headers
+            if readsCustomOptions, let custom = request.options[custom: SystemOneDecisionModel.self] {
+                try custom.apply(to: &extraBody, headers: &headers)
+            }
+
             // System One keys questions and answers by identifier. Use each question's position.
+            let questions = request.questions
             let keys = questions.indices.map(String.init)
-            let request = SystemOneRequest(
+            let body = SystemOneRequest(
                 model: model.modelID,
-                state: state,
+                state: request.state,
                 questions: Dictionary(uniqueKeysWithValues: zip(keys, questions.map(SystemOneQuestion.init))),
-                extraBody: model.extraBody
+                extraBody: extraBody
             )
-            let response = try await model.send(request)
+            let response = try await model.send(body, headers: headers)
             let answers = try keys.map { key in
                 guard let answer = response.answers[key] else {
                     throw DecisionError.invalidResponse("No answer for the question at index \(key).")
@@ -227,7 +266,11 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     /// Sends a request and returns the decoded response.
     ///
     /// Eligible HTTP failures are retried according to ``retryPolicy``.
-    private func send(_ request: SystemOneRequest) async throws -> SystemOneResponse {
+    ///
+    /// - Parameters:
+    ///   - request: The request body.
+    ///   - headers: The extra request headers, without `Authorization`.
+    private func send(_ request: SystemOneRequest, headers: [String: String]) async throws -> SystemOneResponse {
         // Version 0.8's Jev backend read the API key before it encoded the body
         // and checked for cancellation before every attempt.
         // Its Ollama backend encoded the body first
@@ -254,7 +297,7 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         if !requiresAPIKey {
             apiKey = readAPIKey()
         }
-        var headers = self.headers
+        var headers = headers
         if let apiKey {
             headers["Authorization"] = "Bearer \(apiKey)"
         }
@@ -378,13 +421,80 @@ extension SystemOneDecisionModel {
     }
 }
 
+// MARK: - Request options
+
+extension SystemOneDecisionModel {
+    /// Options that a request adds to the model's defaults.
+    ///
+    /// Set them with ``DecisionOptions/subscript(custom:)``.
+    /// A field in ``extraBody`` overrides a field in the model's
+    /// ``SystemOneDecisionModel/extraBody`` with the same top-level key.
+    /// A header in ``extraHeaders`` overrides a header in the model's
+    /// ``SystemOneDecisionModel/headers`` with the same name in any letter case.
+    /// The model's other defaults stay.
+    ///
+    /// Options that belong to one server configuration,
+    /// such as provider routing,
+    /// belong on the model, not on the request,
+    /// because every `SystemOneDecisionModel` reads the same request options.
+    public struct CustomOptions: CustomDecisionOptions {
+        /// Extra top-level fields to add to the request body.
+        ///
+        /// These fields cannot include a key in ``SystemOneDecisionModel/reservedBodyFields``.
+        public var extraBody: [String: JSONValue]
+
+        /// Extra request headers.
+        ///
+        /// These headers cannot include a name in ``SystemOneDecisionModel/reservedHeaders``,
+        /// in any letter case.
+        public var extraHeaders: [String: String]
+
+        /// Creates request options.
+        ///
+        /// - Parameters:
+        ///   - extraBody: Extra top-level fields to add to the request body.
+        ///   - extraHeaders: Extra request headers.
+        public init(extraBody: [String: JSONValue] = [:], extraHeaders: [String: String] = [:]) {
+            self.extraBody = extraBody
+            self.extraHeaders = extraHeaders
+        }
+
+        /// Adds these options to a model's default body fields and headers.
+        ///
+        /// - Throws: ``SystemOneDecisionModel/ConfigurationError``
+        ///   if ``extraBody`` sets a reserved field
+        ///   or ``extraHeaders`` sets a reserved header.
+        func apply(to body: inout [String: JSONValue], headers: inout [String: String]) throws {
+            if let key = SystemOneDecisionModel.reservedBodyField(in: extraBody) {
+                throw ConfigurationError(kind: .reservedBodyField, key: key)
+            }
+            if let name = SystemOneDecisionModel.reservedHeader(in: extraHeaders) {
+                throw ConfigurationError(kind: .reservedHeader, key: name)
+            }
+            body.merge(extraBody) { _, new in new }
+            // Header names are case-insensitive,
+            // so a request header replaces a default header
+            // whose name differs only in letter case.
+            // Sorted names make the result the same for the same options.
+            for name in extraHeaders.keys.sorted() {
+                for existing in headers.keys where existing.lowercased() == name.lowercased() {
+                    headers.removeValue(forKey: existing)
+                }
+                headers[name] = extraHeaders[name]
+            }
+        }
+    }
+}
+
 // MARK: - Configuration errors
 
 extension SystemOneDecisionModel {
     /// An error in the configuration of a System One model.
     ///
     /// ``SystemOneDecisionModel/init(baseURL:path:modelID:apiKey:headers:capabilities:extraBody:session:retryPolicy:)``
-    /// throws this error before it creates the model.
+    /// throws this error before it creates the model,
+    /// and a request throws it before it is sent
+    /// if its ``SystemOneDecisionModel/CustomOptions`` set a reserved key.
     public struct ConfigurationError: Error, Hashable, Sendable, LocalizedError, CustomStringConvertible {
         /// A kind of configuration error.
         #if hasAttribute(nonexhaustive)
@@ -392,9 +502,15 @@ extension SystemOneDecisionModel {
         #endif
         public enum Kind: Hashable, Sendable {
             /// `extraBody` sets a field in ``SystemOneDecisionModel/reservedBodyFields``.
+            ///
+            /// The field can be in the model's `extraBody`
+            /// or in a request's ``SystemOneDecisionModel/CustomOptions/extraBody``.
             case reservedBodyField
 
             /// `headers` sets a header in ``SystemOneDecisionModel/reservedHeaders``.
+            ///
+            /// The header can be in the model's `headers`
+            /// or in a request's ``SystemOneDecisionModel/CustomOptions/extraHeaders``.
             case reservedHeader
         }
 

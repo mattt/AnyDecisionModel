@@ -364,9 +364,9 @@ import Foundation
             }
         }
 
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
+        func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            let questions = request.questions
+            let state = request.state
             let loaded = try await retainedLoadedModel()
             return try await mutex.withLock {
                 try self.decide(questions, about: state, loaded: loaded)

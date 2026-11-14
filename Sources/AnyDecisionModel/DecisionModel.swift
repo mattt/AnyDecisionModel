@@ -6,6 +6,12 @@ import Foundation
 /// It creates an executor for each ``DecisionSession``,
 /// and the executor does the work.
 public protocol DecisionModel: Sendable {
+    /// Options that callers can set for this type of model on each request.
+    ///
+    /// Callers set them with ``DecisionOptions/subscript(custom:)``.
+    /// The default is `Never`, for a model without options.
+    associatedtype CustomOptions: CustomDecisionOptions = Never
+
     /// The model identifier reported in responses.
     var modelID: String { get }
 
@@ -29,12 +35,13 @@ public protocol DecisionModelExecutor: Sendable {
 
     /// Answers a batch of questions about a state.
     ///
-    /// - Parameters:
-    ///   - questions: The questions.
-    ///   - state: The state that the questions are about.
+    /// Read the questions, the state, and the options from the request.
+    /// Read custom options only for your own model type,
+    /// with `request.options[custom: MyDecisionModel.self]`.
+    ///
+    /// - Parameter request: The questions, the state that they are about, and the options.
     /// - Returns: A response with one answer for each question, in the order of the questions.
-    func decide(_ questions: [Question], about state: DecisionState) async throws
-        -> DecisionSession.Response
+    func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response
 }
 
 extension DecisionModelExecutor {
