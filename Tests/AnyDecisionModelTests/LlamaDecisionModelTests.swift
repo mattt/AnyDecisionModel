@@ -13,6 +13,7 @@ import Testing
             #expect(model.gpuLayers == LlamaDecisionModel.defaultGPULayerCount)
             #expect(model.capabilities.maximumChoiceOptions == 26)
             #expect(model.capabilities.maximumScoreLevels == 10)
+            #expect(model.capabilities.probabilitySource == .native)
             #expect(!model.isLoaded)
 
             let cpuOnly = LlamaDecisionModel(modelPath: "/path/to/model.gguf", gpuLayers: 0)

@@ -45,7 +45,14 @@ import Testing
             #expect(model.prefixCaching == true)
             #expect(model.closedThinkFallback == false)
             #expect(model.systemPrompt == TokenScoring.defaultSystemPrompt)
-            #expect(model.capabilities == DecisionCapabilities(maximumChoiceOptions: 26, maximumScoreLevels: 10))
+            #expect(
+                model.capabilities
+                    == DecisionCapabilities(
+                        maximumChoiceOptions: 26,
+                        maximumScoreLevels: 10,
+                        probabilitySource: .native
+                    )
+            )
         }
 
         @available(macOS 27, iOS 27, *)

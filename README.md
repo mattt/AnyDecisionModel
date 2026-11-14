@@ -151,6 +151,13 @@ response.diagnostics  // Local diagnostics, in the order of the questions
 Answers come back in the order of the questions,
 and the position of a question in the batch does not change its result.
 
+A model's `capabilities` declare its limits,
+such as the kinds of questions it answers,
+the number of questions, options, levels, and attachments,
+and the kinds of attachments it reads.
+The session checks each batch against them before the model does any work,
+and `capabilities.validate(_:about:)` does the same check without a session.
+
 ## Backends
 
 ### MLX

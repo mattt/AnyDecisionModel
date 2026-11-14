@@ -142,6 +142,7 @@ import Testing
             let capabilities = MLXHeadDecisionModel(modelID: "example/model", head: .jointSchema).capabilities
             #expect(capabilities.maximumChoiceOptions == nil)
             #expect(capabilities.maximumScoreLevels == nil)
+            #expect(capabilities.probabilitySource == .native)
         }
 
         @Test func downloadsStopBeforeTheWeightsWhenHeadFilesAreMissing() async throws {

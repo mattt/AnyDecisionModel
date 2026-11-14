@@ -32,32 +32,48 @@ public final class DecisionSession: Sendable {
         self.executor = model.makeExecutor()
     }
 
-    /// Checks that the model can read the attachments in the state.
-    private func checkState() throws {
-        try model.capabilities.check(state, modelDescription: String(describing: type(of: model)))
+    /// Checks a batch against the model's capabilities,
+    /// and checks that each question is well formed before its limits.
+    ///
+    /// - Throws: ``DecisionError/unsupportedState(_:)``,
+    ///   ``DecisionError/invalidQuestion(index:reason:)``,
+    ///   or ``DecisionError/unsupportedQuestion(index:reason:)``
+    ///   for the first problem found.
+    private func validate(_ questions: [Question]) throws {
+        try model.capabilities.validate(
+            questions,
+            about: state,
+            modelDescription: String(describing: type(of: model))
+        ) { question, index in
+            try question.validate(index: index)
+        }
     }
 
     /// Loads the model and precomputes work for the state.
     ///
     /// Calling this method is optional.
     /// It moves loading cost out of the first question.
+    ///
+    /// - Throws: ``DecisionError/unsupportedState(_:)``
+    ///   if the state exceeds a limit in the model's ``DecisionModel/capabilities``,
+    ///   before the model loads.
     public func prewarm() async throws {
-        try checkState()
+        try validate([])
         try await executor.prewarm(for: state)
     }
 
     /// Answers a batch of independent questions.
     ///
+    /// The session checks the batch against the model's ``DecisionModel/capabilities``
+    /// before it asks the model to do any work.
+    ///
     /// - Parameter questions: The questions.
     /// - Returns: A response with one answer for each question, in the order of the questions.
-    /// - Throws: ``DecisionError`` if a question is invalid or the backend fails,
+    /// - Throws: ``DecisionError`` if a question is invalid, the batch exceeds a limit,
+    ///   or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
     public func decide(_ questions: [Question]) async throws -> Response {
-        try checkState()
-        for (index, question) in questions.enumerated() {
-            try question.validate(index: index)
-            try model.capabilities.check(question, index: index)
-        }
+        try validate(questions)
         guard !questions.isEmpty else {
             return Response(modelID: model.modelID, answers: [])
         }

@@ -97,7 +97,7 @@ import Foundation
         }
 
         public var capabilities: DecisionCapabilities {
-            DecisionCapabilities()
+            DecisionCapabilities(probabilitySource: .native)
         }
 
         public func makeExecutor() -> any DecisionModelExecutor {

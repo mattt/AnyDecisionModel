@@ -42,7 +42,19 @@ extension DecisionModelExecutor {
 }
 
 /// The limits and features of a decision backend.
+///
+/// A session enforces every limit that the capabilities declare
+/// before it asks the model to do any work.
+/// Call ``validate(_:about:)`` to check a batch without sending it.
 public struct DecisionCapabilities: Hashable, Sendable {
+    /// The kinds of questions that the model can answer.
+    ///
+    /// The default is every kind.
+    public var questionKinds: Set<DecisionKind>
+
+    /// The largest number of questions in one batch, or `nil` for no local limit.
+    public var maximumQuestions: Int?
+
     /// The largest number of options in a choice question, or `nil` for no local limit.
     public var maximumChoiceOptions: Int?
 
@@ -56,25 +68,142 @@ public struct DecisionCapabilities: Hashable, Sendable {
     /// before it asks the model to do any work.
     public var supportedAttachmentKinds: Set<DecisionState.Attachment.Kind>
 
+    /// The largest number of attachments in a state, or `nil` for no local limit.
+    public var maximumAttachments: Int?
+
+    /// How the model produces its probabilities.
+    public var probabilitySource: ProbabilitySource
+
     /// Creates a capabilities description.
+    ///
+    /// A call that uses only the parameters of version 0.8,
+    /// or no parameters,
+    /// uses ``init(maximumChoiceOptions:maximumScoreLevels:supportedAttachmentKinds:)``,
+    /// which gives the same values as this initializer.
+    /// A call that uses a newer parameter uses this initializer.
+    ///
+    /// - Parameters:
+    ///   - questionKinds: The kinds of questions that the model can answer.
+    ///   - maximumQuestions: The largest number of questions in one batch,
+    ///     or `nil` for no local limit.
+    ///   - maximumChoiceOptions: The largest number of options in a choice question,
+    ///     or `nil` for no local limit.
+    ///   - maximumScoreLevels: The largest number of levels in a score question,
+    ///     or `nil` for no local limit.
+    ///   - supportedAttachmentKinds: The kinds of attachments that the model can read in a state.
+    ///   - maximumAttachments: The largest number of attachments in a state,
+    ///     or `nil` for no local limit.
+    ///   - probabilitySource: How the model produces its probabilities.
+    @_disfavoredOverload
+    public init(
+        questionKinds: Set<DecisionKind> = [.binary, .choice, .score],
+        maximumQuestions: Int? = nil,
+        maximumChoiceOptions: Int? = nil,
+        maximumScoreLevels: Int? = nil,
+        supportedAttachmentKinds: Set<DecisionState.Attachment.Kind> = [],
+        maximumAttachments: Int? = nil,
+        probabilitySource: ProbabilitySource = .unspecified
+    ) {
+        self.questionKinds = questionKinds
+        self.maximumQuestions = maximumQuestions
+        self.maximumChoiceOptions = maximumChoiceOptions
+        self.maximumScoreLevels = maximumScoreLevels
+        self.supportedAttachmentKinds = supportedAttachmentKinds
+        self.maximumAttachments = maximumAttachments
+        self.probabilitySource = probabilitySource
+    }
+
+    /// Creates a capabilities description with the parameters of version 0.8.
+    ///
+    /// The capabilities support every question kind,
+    /// have no limit on questions or attachments,
+    /// and have an unspecified probability source.
+    /// This initializer keeps version 0.8 calls and references,
+    /// such as `DecisionCapabilities.init`, compiling with the same meaning.
+    /// To set another capability, use
+    /// ``init(questionKinds:maximumQuestions:maximumChoiceOptions:maximumScoreLevels:supportedAttachmentKinds:maximumAttachments:probabilitySource:)``.
+    ///
+    /// - Parameters:
+    ///   - maximumChoiceOptions: The largest number of options in a choice question,
+    ///     or `nil` for no local limit.
+    ///   - maximumScoreLevels: The largest number of levels in a score question,
+    ///     or `nil` for no local limit.
+    ///   - supportedAttachmentKinds: The kinds of attachments that the model can read in a state.
     public init(
         maximumChoiceOptions: Int? = nil,
         maximumScoreLevels: Int? = nil,
         supportedAttachmentKinds: Set<DecisionState.Attachment.Kind> = []
     ) {
-        self.maximumChoiceOptions = maximumChoiceOptions
-        self.maximumScoreLevels = maximumScoreLevels
-        self.supportedAttachmentKinds = supportedAttachmentKinds
+        self.init(
+            questionKinds: [.binary, .choice, .score],
+            maximumQuestions: nil,
+            maximumChoiceOptions: maximumChoiceOptions,
+            maximumScoreLevels: maximumScoreLevels,
+            supportedAttachmentKinds: supportedAttachmentKinds,
+            maximumAttachments: nil,
+            probabilitySource: .unspecified
+        )
     }
 
-    /// Checks the attachments in a state against the supported kinds.
+    /// Checks a batch of questions about a state against the limits.
     ///
+    /// This method checks only the limits that the capabilities declare.
+    /// A backend can reject a batch for other reasons when it answers,
+    /// and ``DecisionSession`` also rejects malformed questions
+    /// with ``DecisionError/invalidQuestion(index:reason:)``.
+    ///
+    /// The checks run in this order:
+    /// the kinds of the attachments in the state,
+    /// the number of attachments,
+    /// the kind, options, and levels of each question in order,
+    /// and then the number of questions.
+    ///
+    /// - Parameters:
+    ///   - questions: The questions.
+    ///   - state: The state that the questions are about.
     /// - Throws: ``DecisionError/unsupportedState(_:)``
-    ///   if the state has an attachment of a kind that the model can't read.
-    func check(_ state: DecisionState, modelDescription: String) throws {
-        for attachment in state.attachments where !supportedAttachmentKinds.contains(attachment.kind) {
+    ///   or ``DecisionError/unsupportedQuestion(index:reason:)``
+    ///   for the first limit that the batch exceeds.
+    public func validate(_ questions: [Question], about state: DecisionState) throws {
+        try validate(questions, about: state, modelDescription: "The model") { _, _ in }
+    }
+
+    /// Checks a batch of questions about a state against the limits,
+    /// and checks each question with a closure before its limits.
+    ///
+    /// - Parameters:
+    ///   - questions: The questions.
+    ///   - state: The state that the questions are about.
+    ///   - modelDescription: The name of the model in errors about the state and the number of questions.
+    ///   - checkQuestion: A closure that checks one question and its index
+    ///     before the question's limits.
+    func validate(
+        _ questions: [Question],
+        about state: DecisionState,
+        modelDescription: String,
+        checkQuestion: (Question, Int) throws -> Void
+    ) throws {
+        let attachments = state.attachments
+        for attachment in attachments where !supportedAttachmentKinds.contains(attachment.kind) {
             throw DecisionError.unsupportedState(
                 "\(modelDescription) does not support \(attachment.kind.rawValue) attachments."
+            )
+        }
+        if let maximum = maximumAttachments, attachments.count > maximum {
+            throw DecisionError.unsupportedState(
+                "\(modelDescription) supports at most \(maximum) \(maximum == 1 ? "attachment" : "attachments"), "
+                    + "not \(attachments.count)."
+            )
+        }
+        for (index, question) in questions.enumerated() {
+            try checkQuestion(question, index)
+            try check(question, index: index)
+        }
+        if let maximum = maximumQuestions, questions.count > maximum {
+            throw DecisionError.unsupportedQuestion(
+                index: maximum,
+                reason: "\(modelDescription) accepts at most \(maximum) \(maximum == 1 ? "question" : "questions") "
+                    + "in one request, not \(questions.count)."
             )
         }
     }
@@ -83,6 +212,12 @@ public struct DecisionCapabilities: Hashable, Sendable {
     ///
     /// - Throws: ``DecisionError/unsupportedQuestion(index:reason:)`` if the question exceeds a limit.
     func check(_ question: Question, index: Int) throws {
+        guard questionKinds.contains(question.kind) else {
+            throw DecisionError.unsupportedQuestion(
+                index: index,
+                reason: "The model does not support \(question.kind.rawValue) questions."
+            )
+        }
         switch question {
         case .binary:
             break
@@ -101,5 +236,22 @@ public struct DecisionCapabilities: Hashable, Sendable {
                 )
             }
         }
+    }
+}
+
+extension DecisionCapabilities {
+    /// How a model produces the probabilities in its answers.
+    #if hasAttribute(nonexhaustive)
+        @nonexhaustive
+    #endif
+    public enum ProbabilitySource: String, Hashable, Sendable, Codable {
+        /// The model reads probabilities from its output distribution or from a decision head.
+        case native
+
+        /// The model was prompted to state a number.
+        case estimated
+
+        /// The provider does not say how it produces probabilities.
+        case unspecified
     }
 }
