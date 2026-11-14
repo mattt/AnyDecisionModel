@@ -76,6 +76,12 @@ public struct DecisionCapabilities: Hashable, Sendable {
 
     /// Creates a capabilities description.
     ///
+    /// A call that uses only the parameters of version 0.8,
+    /// or no parameters,
+    /// uses ``init(maximumChoiceOptions:maximumScoreLevels:supportedAttachmentKinds:)``,
+    /// which gives the same values as this initializer.
+    /// A call that uses a newer parameter uses this initializer.
+    ///
     /// - Parameters:
     ///   - questionKinds: The kinds of questions that the model can answer.
     ///   - maximumQuestions: The largest number of questions in one batch,
@@ -88,6 +94,7 @@ public struct DecisionCapabilities: Hashable, Sendable {
     ///   - maximumAttachments: The largest number of attachments in a state,
     ///     or `nil` for no local limit.
     ///   - probabilitySource: How the model produces its probabilities.
+    @_disfavoredOverload
     public init(
         questionKinds: Set<DecisionKind> = [.binary, .choice, .score],
         maximumQuestions: Int? = nil,
@@ -108,10 +115,13 @@ public struct DecisionCapabilities: Hashable, Sendable {
 
     /// Creates a capabilities description with the parameters of version 0.8.
     ///
-    /// This initializer keeps references to it,
-    /// such as `DecisionCapabilities.init(maximumChoiceOptions:maximumScoreLevels:supportedAttachmentKinds:)`,
-    /// compiling.
-    /// Calls use the initializer with every parameter.
+    /// The capabilities support every question kind,
+    /// have no limit on questions or attachments,
+    /// and have an unspecified probability source.
+    /// This initializer keeps version 0.8 calls and references,
+    /// such as `DecisionCapabilities.init`, compiling with the same meaning.
+    /// To set another capability, use
+    /// ``init(questionKinds:maximumQuestions:maximumChoiceOptions:maximumScoreLevels:supportedAttachmentKinds:maximumAttachments:probabilitySource:)``.
     ///
     /// - Parameters:
     ///   - maximumChoiceOptions: The largest number of options in a choice question,
@@ -119,11 +129,10 @@ public struct DecisionCapabilities: Hashable, Sendable {
     ///   - maximumScoreLevels: The largest number of levels in a score question,
     ///     or `nil` for no local limit.
     ///   - supportedAttachmentKinds: The kinds of attachments that the model can read in a state.
-    @_disfavoredOverload
     public init(
-        maximumChoiceOptions: Int?,
-        maximumScoreLevels: Int?,
-        supportedAttachmentKinds: Set<DecisionState.Attachment.Kind>
+        maximumChoiceOptions: Int? = nil,
+        maximumScoreLevels: Int? = nil,
+        supportedAttachmentKinds: Set<DecisionState.Attachment.Kind> = []
     ) {
         self.init(
             questionKinds: [.binary, .choice, .score],
