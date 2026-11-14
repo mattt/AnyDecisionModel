@@ -4,9 +4,13 @@ import Testing
 
 @testable import AnyDecisionModel
 
-@Suite("JevDecisionModel.RetryPolicy")
+@Suite("RetryPolicy")
 struct RetryPolicyTests {
-    typealias RetryPolicy = JevDecisionModel.RetryPolicy
+    @Test func jevAliasIsTopLevelType() {
+        #expect(JevDecisionModel.RetryPolicy.self == RetryPolicy.self)
+        let policy: JevDecisionModel.RetryPolicy = RetryPolicy.never
+        #expect(JevDecisionModel(apiKey: nil, retryPolicy: policy).retryPolicy == RetryPolicy.never)
+    }
 
     @Test func constantBackoffStrategy() {
         let policy = RetryPolicy(
