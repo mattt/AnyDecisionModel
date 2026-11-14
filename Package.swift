@@ -27,11 +27,21 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.4.0"),
         .package(url: "https://github.com/john-rocky/coreai-kit", from: "0.7.3"),
         .package(url: "https://github.com/mattt/llama.swift", .upToNextMajor(from: "3.0.0")),
+        .package(url: "https://github.com/apple/swift-http-types", from: "1.5.0"),
     ],
     targets: [
         .target(
             name: "AnyDecisionModel",
             dependencies: [
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(
+                    name: "HTTPTypesFoundation",
+                    package: "swift-http-types",
+                    // It extends URLSession, which WASI doesn't have.
+                    condition: .when(platforms: [
+                        .macOS, .macCatalyst, .iOS, .tvOS, .watchOS, .visionOS, .linux, .windows, .android,
+                    ])
+                ),
                 .product(
                     name: "MLXLLM",
                     package: "mlx-swift-lm",
