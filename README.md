@@ -98,7 +98,7 @@ Add the package to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/mattt/AnyDecisionModel", from: "0.8.0")
+    .package(url: "https://github.com/mattt/AnyDecisionModel", from: "0.9.0")
 ]
 ```
 
@@ -109,7 +109,7 @@ Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 ```swift
 .package(
     url: "https://github.com/mattt/AnyDecisionModel",
-    from: "0.8.0",
+    from: "0.9.0",
     traits: ["MLX", "CoreAI", "Llama"]
 )
 ```
