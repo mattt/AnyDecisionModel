@@ -222,6 +222,68 @@ Only an executor of that type reads it,
 and the subscript returns `nil` for a type that has no value.
 A model without custom options has `Never` as its `CustomOptions` type.
 
+### Errors
+
+A model or session throws a `DecisionError`,
+or `CancellationError` if the task is cancelled.
+The error's `code` names the kind of failure,
+and `message` describes it.
+Other fields are set when they apply:
+`questionIndex` for an error about one question,
+`reason` for a provider's code such as `safety`,
+`retryAfter` for a server that asks the caller to wait,
+and `response` for an HTTP failure,
+with its status code, headers, and body.
+
+```swift
+do {
+    let urgent = try await session.probability(of: "Does this convey urgency?")
+} catch let error as DecisionError where error.code == .rateLimited {
+    try await Task.sleep(for: error.retryAfter ?? .seconds(1))
+} catch let error as DecisionError {
+    print(error.code, error.message)
+}
+```
+
+The remote backends map HTTP status codes in the same way:
+401 and 403 to `authenticationFailed`, 402 to `quotaExceeded`,
+408 and 504 to `timedOut`, 429 to `rateLimited`,
+and every other status to `requestFailed`.
+A `URLError` becomes `timedOut` or `transportFailed`.
+`isRetryable` is `true` for HTTP 429, 503, and 529, a timeout, and a transport failure;
+a model that retries reads its `RetryPolicy` instead,
+whose `retryableStatusCodes` decide.
+No error contains an API key:
+the values of credential headers such as `Authorization` are replaced,
+and the request's key is removed from the response body.
+
+#### Migrating errors from version 0.9
+
+In version 0.9, `DecisionError` is an enum.
+Code that creates an error,
+such as `throw DecisionError.invalidQuestion(index: 0, reason: "Empty.")`,
+compiles unchanged, with the same message,
+and `#expect(throws: DecisionError.missingCredentials)` still matches.
+Code that matches cases does not compile, and needs these changes:
+
+- `catch DecisionError.requestFailed(let status, let detail, let headers)` becomes
+  `catch let error as DecisionError where error.response != nil`,
+  with `error.response?.statusCode`, `error.response?.body`, and `error.response?.headers`.
+  The code of an HTTP error is now one of
+  `authenticationFailed`, `quotaExceeded`, `timedOut`, `rateLimited`, and `requestFailed`.
+- `catch DecisionError.invalidResponse(let detail)`,
+  and the same pattern for the other cases, becomes
+  `catch let error as DecisionError where error.code == .invalidResponse`,
+  with `error.message`.
+- `case .unsupportedQuestion(let index, _)` becomes
+  a check of `error.code` and `error.questionIndex`.
+- `switch error` over the cases becomes `switch error.code`, with `@unknown default`.
+- `headers["retry-after"]` becomes `error.retryAfter`, a `Duration`.
+- `catch let error as URLError` becomes a check for the codes `timedOut` and `transportFailed`.
+- `catch let error as SystemOneDecisionModel.ConfigurationError` for a request's options
+  becomes a check for the code `unsupportedOption`.
+  The `SystemOneDecisionModel` initializer still throws `ConfigurationError`.
+
 ## Backends
 
 ### MLX
@@ -579,7 +641,8 @@ A request option overrides a default with the same top-level body key,
 or a header with the same name in any letter case.
 The other defaults stay.
 Request options have the same reserved keys,
-and the request throws `SystemOneDecisionModel.ConfigurationError` before it is sent if one is set.
+and the request throws a `DecisionError` with the code `unsupportedOption`
+before it is sent if one is set.
 Every `SystemOneDecisionModel` reads the same request options,
 so put a field that belongs to one server, such as provider routing, on the model.
 `JevDecisionModel` and `OllamaDecisionModel` have no custom options
@@ -633,7 +696,7 @@ with one JPEG image, a yes-or-no question, and a choice question.
 Images have not been run against Liquid's API or Ollama.
 llama.cpp places every image before the state in the prompt,
 and returns HTTP status 501 if the model or its projector does not read images;
-the model throws `DecisionError.requestFailed` for that response.
+the model throws a `DecisionError` with the code `requestFailed` for that response.
 
 A model with an image encoding declares `.image` in `capabilities.supportedAttachmentKinds`,
 and a model without one declares no attachment kinds,
