@@ -12,6 +12,28 @@ enum HTTP {
         case get = "GET"
         case post = "POST"
     }
+
+    /// Returns text with the credentials in request headers replaced.
+    ///
+    /// The credentials are the values of the headers in
+    /// ``DecisionError/HTTPResponse/credentialHeaders``,
+    /// and the token after the scheme in a value such as `Bearer token`.
+    static func redactingCredentials(in text: String, requestHeaders: [String: String]) -> String {
+        var secrets: Set<String> = []
+        for (name, value) in requestHeaders
+        where DecisionError.HTTPResponse.credentialHeaders.contains(name.lowercased()) {
+            secrets.insert(value)
+            if let space = value.firstIndex(of: " ") {
+                secrets.insert(String(value[value.index(after: space)...]).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        // Replace longer values first, so a token inside a full header value doesn't split it.
+        var text = text
+        for secret in secrets.sorted(by: { $0.count > $1.count }) where !secret.isEmpty {
+            text = text.replacingOccurrences(of: secret, with: DecisionError.HTTPResponse.redactedValue)
+        }
+        return text
+    }
 }
 
 #if canImport(FoundationNetworking)
@@ -96,9 +118,15 @@ enum HTTP {
 extension URLSession {
     /// Sends a request and returns the body and response.
     ///
+    /// The values of credential headers in `headers`,
+    /// such as `Authorization`,
+    /// never appear in an error.
+    ///
     /// - Throws: ``DecisionError/requestFailed(statusCode:detail:headers:)``
     ///   for a status code outside 200 to 299, with the response headers,
     ///   ``DecisionError/invalidResponse(_:)`` for a non-HTTP response,
+    ///   a ``DecisionError`` with the code ``DecisionError/Code/timedOut``
+    ///   or ``DecisionError/Code/transportFailed`` for a `URLError`,
     ///   or `CancellationError` if the task is cancelled.
     func send(
         _ method: HTTP.Method,
@@ -129,8 +157,11 @@ extension URLSession {
             #else
                 (data, response) = try await self.data(for: request)
             #endif
-        } catch let error as URLError where error.code == .cancelled {
-            throw CancellationError()
+        } catch let error as URLError {
+            if error.code == .cancelled {
+                throw CancellationError()
+            }
+            throw DecisionError(error)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -138,7 +169,11 @@ extension URLSession {
         }
 
         guard (200 ..< 300).contains(httpResponse.statusCode) else {
-            let detail = String(data: data, encoding: .utf8) ?? "Invalid response"
+            // A server can echo a credential, for example in an "invalid API key" message.
+            let detail = HTTP.redactingCredentials(
+                in: String(data: data, encoding: .utf8) ?? "Invalid response",
+                requestHeaders: headers
+            )
             throw DecisionError.requestFailed(
                 statusCode: httpResponse.statusCode,
                 detail: detail,

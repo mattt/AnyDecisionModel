@@ -295,8 +295,15 @@ struct GeminiDecisionModelTests {
         }
     }
 
-    @Test(arguments: [400, 401, 429, 500])
-    func reportsHTTPErrors(statusCode: Int) async throws {
+    @Test(
+        arguments: [
+            (400, DecisionError.Code.requestFailed),
+            (401, .authenticationFailed),
+            (429, .rateLimited),
+            (500, .requestFailed),
+        ]
+    )
+    func reportsHTTPErrors(statusCode: Int, code: DecisionError.Code) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(
             json: #"{"error": {"code": \#(statusCode), "message": "Too many questions."}}"#,
@@ -308,11 +315,12 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch let DecisionError.requestFailed(code, detail, headers) {
-            #expect(code == statusCode)
-            #expect(detail.contains("Too many questions."))
-            #expect(!detail.contains("test-key"))
-            #expect(headers["x-request-id"] == "abc")
+        } catch let error as DecisionError {
+            #expect(error.code == code)
+            #expect(error.response?.statusCode == statusCode)
+            #expect(error.response?.body.contains("Too many questions.") == true)
+            #expect(!error.message.contains("test-key"))
+            #expect(error.response?.headers["x-request-id"] == "abc")
         }
         #expect(host.recorded.count == 1)
     }
@@ -327,9 +335,10 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch let DecisionError.requestFailed(code, detail, _) {
-            #expect(code == 400)
-            #expect(detail.contains("invalid_argument"))
+        } catch let error as DecisionError {
+            #expect(error.code == .requestFailed)
+            #expect(error.response?.statusCode == 400)
+            #expect(error.response?.body.contains("invalid_argument") == true)
         }
     }
 
@@ -346,8 +355,8 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch DecisionError.invalidResponse(let detail) {
-            #expect(!detail.hasPrefix("No answer"))
+        } catch let error as DecisionError where error.code == .invalidResponse {
+            #expect(!error.message.hasPrefix("Invalid response: No answer"))
         }
     }
 
@@ -378,8 +387,8 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.decide(questions)
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedQuestion(let index, _) {
-            #expect(index == 1000)
+        } catch let error as DecisionError where error.code == .unsupportedQuestion {
+            #expect(error.questionIndex == 1000)
         }
         #expect(host.recorded.isEmpty)
     }
@@ -450,8 +459,8 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.decide(.choice(instructions: "x", options: [ChoiceOption("only")]))
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedQuestion(let index, _) {
-            #expect(index == 0)
+        } catch let error as DecisionError where error.code == .unsupportedQuestion {
+            #expect(error.questionIndex == 0)
         }
         #expect(host.recorded.isEmpty)
     }
@@ -577,7 +586,7 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Urgent?")
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedState {
+        } catch let error as DecisionError where error.code == .unsupportedState {
         }
         #expect(host.recorded.isEmpty)
     }
@@ -603,7 +612,7 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Urgent?")
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedState {
+        } catch let error as DecisionError where error.code == .unsupportedState {
         }
         #expect(host.recorded.isEmpty)
     }

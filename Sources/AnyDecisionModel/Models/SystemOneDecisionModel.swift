@@ -425,17 +425,11 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
                     throw DecisionError.invalidResponse(String(describing: error))
                 }
             } catch let error as DecisionError {
-                guard case .requestFailed(let statusCode, _, let responseHeaders) = error,
-                    retryPolicy.retryableStatusCodes.contains(statusCode),
-                    let generatedDelay = retrier.next()
-                else {
+                guard retryPolicy.shouldRetry(error), let generatedDelay = retrier.next() else {
                     throw error
                 }
 
-                let delay = retryPolicy.delay(
-                    generatedDelay,
-                    retryAfter: responseHeaders["retry-after"]
-                )
+                let delay = retryPolicy.delay(generatedDelay, retryAfter: error.retryAfter)
                 try await Task.sleep(for: .seconds(delay))
                 isRetry = true
             }
@@ -599,6 +593,9 @@ extension SystemOneDecisionModel {
     /// A header in ``extraHeaders`` overrides a header in the model's
     /// ``SystemOneDecisionModel/headers`` with the same name in any letter case.
     /// The model's other defaults stay.
+    /// A request whose options set a reserved key
+    /// throws a ``DecisionError`` with the code ``DecisionError/Code/unsupportedOption``
+    /// before it is sent.
     ///
     /// Options that belong to one server configuration,
     /// such as provider routing,
@@ -628,15 +625,19 @@ extension SystemOneDecisionModel {
 
         /// Adds these options to a model's default body fields and headers.
         ///
-        /// - Throws: ``SystemOneDecisionModel/ConfigurationError``
+        /// - Throws: ``DecisionError`` with the code ``DecisionError/Code/unsupportedOption``
         ///   if ``extraBody`` sets a reserved field
         ///   or ``extraHeaders`` sets a reserved header.
         func apply(to body: inout [String: JSONValue], headers: inout [String: String]) throws {
             if let key = SystemOneDecisionModel.reservedBodyField(in: extraBody) {
-                throw ConfigurationError(kind: .reservedBodyField, key: key)
+                throw DecisionError.unsupportedOption(
+                    "CustomOptions.extraBody cannot set the reserved field \"\(key)\"."
+                )
             }
             if let name = SystemOneDecisionModel.reservedHeader(in: extraHeaders) {
-                throw ConfigurationError(kind: .reservedHeader, key: name)
+                throw DecisionError.unsupportedOption(
+                    "CustomOptions.extraHeaders cannot set the reserved header \"\(name)\"."
+                )
             }
             body.merge(extraBody) { _, new in new }
             // Header names are case-insensitive,
@@ -659,25 +660,20 @@ extension SystemOneDecisionModel {
     /// An error in the configuration of a System One model.
     ///
     /// ``SystemOneDecisionModel/init(baseURL:path:modelID:apiKey:headers:capabilities:extraBody:session:retryPolicy:)``
-    /// throws this error before it creates the model,
-    /// and a request throws it before it is sent
-    /// if its ``SystemOneDecisionModel/CustomOptions`` set a reserved key.
+    /// throws this error before it creates the model.
+    /// A request whose ``SystemOneDecisionModel/CustomOptions`` set a reserved key
+    /// throws a ``DecisionError`` with the code ``DecisionError/Code/unsupportedOption``
+    /// before it is sent.
     public struct ConfigurationError: Error, Hashable, Sendable, LocalizedError, CustomStringConvertible {
         /// A kind of configuration error.
         #if hasAttribute(nonexhaustive)
             @nonexhaustive
         #endif
         public enum Kind: Hashable, Sendable {
-            /// `extraBody` sets a field in ``SystemOneDecisionModel/reservedBodyFields``.
-            ///
-            /// The field can be in the model's `extraBody`
-            /// or in a request's ``SystemOneDecisionModel/CustomOptions/extraBody``.
+            /// The model's `extraBody` sets a field in ``SystemOneDecisionModel/reservedBodyFields``.
             case reservedBodyField
 
-            /// `headers` sets a header in ``SystemOneDecisionModel/reservedHeaders``.
-            ///
-            /// The header can be in the model's `headers`
-            /// or in a request's ``SystemOneDecisionModel/CustomOptions/extraHeaders``.
+            /// The model's `headers` sets a header in ``SystemOneDecisionModel/reservedHeaders``.
             case reservedHeader
         }
 

@@ -156,9 +156,10 @@ struct OllamaDecisionModelTests {
         do {
             _ = try await session.probability(of: "Is this urgent?")
             Issue.record("Expected the request to fail.")
-        } catch let DecisionError.requestFailed(statusCode, detail, _) {
-            #expect(statusCode == 404)
-            #expect(detail.contains("not found"))
+        } catch let error as DecisionError {
+            #expect(error.code == .requestFailed)
+            #expect(error.response?.statusCode == 404)
+            #expect(error.response?.body.contains("not found") == true)
         }
     }
 

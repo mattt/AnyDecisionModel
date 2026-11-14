@@ -132,8 +132,7 @@ import Testing
             await #expect {
                 _ = try await session.decide(.binary(instructions: "Is this a test?"))
             } throws: { error in
-                guard case .modelUnavailable = error as? AnyDecisionModel.DecisionError else { return false }
-                return true
+                (error as? AnyDecisionModel.DecisionError)?.code == .modelUnavailable
             }
             #expect(model.isLoaded == false)
         }
@@ -148,15 +147,13 @@ import Testing
             await #expect {
                 _ = try await session.decide(.choice(instructions: "Pick one.", options: options))
             } throws: { error in
-                guard case .unsupportedQuestion = error as? AnyDecisionModel.DecisionError else { return false }
-                return true
+                (error as? AnyDecisionModel.DecisionError)?.code == .unsupportedQuestion
             }
             let levels = (0 ..< 11).map { "level \($0)" }
             await #expect {
                 _ = try await session.decide(.score(instructions: "Rate.", levels: levels))
             } throws: { error in
-                guard case .unsupportedQuestion = error as? AnyDecisionModel.DecisionError else { return false }
-                return true
+                (error as? AnyDecisionModel.DecisionError)?.code == .unsupportedQuestion
             }
         }
     }
@@ -454,10 +451,10 @@ import Testing
             await #expect {
                 _ = try await session.decide([questions[0], questions[1]])
             } throws: { error in
-                guard case .unsupportedQuestion(let index, _) = error as? AnyDecisionModel.DecisionError else {
+                guard let error = error as? AnyDecisionModel.DecisionError, error.code == .unsupportedQuestion else {
                     return false
                 }
-                return index == 0
+                return error.questionIndex == 0
             }
         }
 

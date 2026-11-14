@@ -329,8 +329,9 @@ struct SystemOneDecisionModelTests {
         do {
             _ = try await session.probability(of: "Is this urgent?")
             Issue.record("Expected the request to fail.")
-        } catch let DecisionError.requestFailed(statusCode, _, _) {
-            #expect(statusCode == 429)
+        } catch let error as DecisionError {
+            #expect(error.code == .rateLimited)
+            #expect(error.response?.statusCode == 429)
         }
         #expect(host.recorded.count == 1)
     }
@@ -408,7 +409,7 @@ struct SystemOneDecisionModelTests {
         do {
             _ = try await session.decide([.binary(instructions: "A?"), .binary(instructions: "B?")])
             Issue.record("Expected an error.")
-        } catch DecisionError.invalidResponse {
+        } catch let error as DecisionError where error.code == .invalidResponse {
         }
     }
 
@@ -422,7 +423,7 @@ struct SystemOneDecisionModelTests {
         do {
             _ = try await session.decide(.binary(instructions: "Where is the dog?"))
             Issue.record("Expected an error.")
-        } catch DecisionError.invalidResponse {
+        } catch let error as DecisionError where error.code == .invalidResponse {
         }
     }
 
@@ -792,7 +793,10 @@ extension SystemOneDecisionModelTests {
         host.enqueue(json: okResponse)
         let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
-        await #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: key)) {
+        let expected = DecisionError.unsupportedOption(
+            "CustomOptions.extraBody cannot set the reserved field \"\(key)\"."
+        )
+        await #expect(throws: expected) {
             _ = try await session.decide(
                 [.binary(instructions: "Is this urgent?")],
                 options: systemOneOptions(extraBody: [key: "x", "seed": 1])
@@ -807,7 +811,10 @@ extension SystemOneDecisionModelTests {
         host.enqueue(json: okResponse)
         let session = DecisionSession(model: try makeModel(host, apiKey: "secret"), state: "ticket")
 
-        await #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedHeader, key: name)) {
+        let expected = DecisionError.unsupportedOption(
+            "CustomOptions.extraHeaders cannot set the reserved header \"\(name)\"."
+        )
+        await #expect(throws: expected) {
             _ = try await session.decide(
                 [.binary(instructions: "Is this urgent?")],
                 options: systemOneOptions(extraHeaders: [name: "x", "traceparent": "y"])
@@ -1082,9 +1089,10 @@ struct SystemOneDecisionModelImageTests {
         do {
             _ = try await session.probability(of: "Is the item damaged?")
             Issue.record("Expected the request to fail.")
-        } catch let DecisionError.requestFailed(statusCode, detail, _) {
-            #expect(statusCode == 501)
-            #expect(detail.contains("image input is not supported"))
+        } catch let error as DecisionError {
+            #expect(error.code == .requestFailed)
+            #expect(error.response?.statusCode == 501)
+            #expect(error.response?.body.contains("image input is not supported") == true)
         }
         #expect(host.recorded.count == 1)
     }
@@ -1099,7 +1107,10 @@ struct SystemOneDecisionModelImageTests {
         var options = DecisionOptions()
         options[custom: SystemOneDecisionModel.self] = .init(extraBody: ["images": ["data:,"]])
         let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: "ticket")
-        await #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: "images")) {
+        let expected = DecisionError.unsupportedOption(
+            "CustomOptions.extraBody cannot set the reserved field \"images\"."
+        )
+        await #expect(throws: expected) {
             _ = try await session.probability(of: "Is this urgent?", options: options)
         }
         #expect(host.recorded.isEmpty)

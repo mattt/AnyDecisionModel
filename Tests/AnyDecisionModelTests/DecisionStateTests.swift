@@ -249,7 +249,7 @@ struct UnsupportedAttachmentTests {
                 DecisionRequest(state: state, questions: [.binary(instructions: "Is this urgent?")])
             )
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedState {
+        } catch let error as DecisionError where error.code == .unsupportedState {
         }
         #expect(host.recorded.isEmpty)
     }

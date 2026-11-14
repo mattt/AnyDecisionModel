@@ -339,8 +339,8 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
         let data: Data
         do {
             (data, _) = try await urlSession.send(.post, url: url, headers: headers, body: body)
-        } catch DecisionError.requestFailed(let statusCode, let detail, let responseHeaders) {
-            throw Self.error(statusCode: statusCode, detail: detail, headers: responseHeaders)
+        } catch let error as DecisionError {
+            throw Self.error(error)
         }
         do {
             return try JSONDecoder().decode(GeminiResponse.self, from: data)
@@ -349,22 +349,23 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
         }
     }
 
-    /// Maps an HTTP error to a decision error.
+    /// Maps an error from the shared HTTP code to a Gemini decision error.
     ///
     /// Gemini reports a blocked input as HTTP 400
     /// with a string error code, such as `safety`.
-    /// That error becomes ``DecisionError/inputBlocked(reason:message:)``.
-    /// Any other error stays ``DecisionError/requestFailed(statusCode:detail:headers:)``
-    /// with the original response body.
-    static func error(statusCode: Int, detail: String, headers: [String: String]) -> DecisionError {
-        if statusCode == 400,
-            let body = try? JSONDecoder().decode(GeminiErrorBody.self, from: Data(detail.utf8)),
+    /// That error becomes ``DecisionError/inputBlocked(reason:message:)``,
+    /// without a ``DecisionError/response``,
+    /// so that it equals the error that version 0.9 threw.
+    /// Any other error is returned unchanged.
+    static func error(_ error: DecisionError) -> DecisionError {
+        if let response = error.response, response.statusCode == 400,
+            let body = try? JSONDecoder().decode(GeminiErrorBody.self, from: Data(response.body.utf8)),
             let reason = body.error?.code,
             blockReasons.contains(reason)
         {
             return .inputBlocked(reason: reason, message: body.error?.message)
         }
-        return .requestFailed(statusCode: statusCode, detail: detail, headers: headers)
+        return error
     }
 
     /// The error codes and block reasons that Gemini documents for a blocked input.

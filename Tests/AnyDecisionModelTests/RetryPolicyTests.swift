@@ -4,6 +4,10 @@ import Testing
 
 @testable import AnyDecisionModel
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 @Suite("RetryPolicy")
 struct RetryPolicyTests {
     @Test func jevAliasIsTopLevelType() {
@@ -194,10 +198,12 @@ struct RetryPolicyTests {
 
     @Test func retryAfterSecondsReplacesAndCapsGeneratedDelay() {
         let policy = RetryPolicy(maximumInterval: 8)
+        let now = Date()
 
-        #expect(policy.delay(0.5, retryAfter: "3") == 3)
-        #expect(policy.delay(0.5, retryAfter: "120") == 8)
-        #expect(policy.delay(0.5, retryAfter: "-1") == 0)
+        #expect(policy.delay(0.5, retryAfter: DecisionError.retryAfter(from: "3", now: now)) == 3)
+        #expect(policy.delay(0.5, retryAfter: DecisionError.retryAfter(from: "120", now: now)) == 8)
+        #expect(policy.delay(0.5, retryAfter: DecisionError.retryAfter(from: "-1", now: now)) == 0)
+        #expect(policy.delay(0.5, retryAfter: .milliseconds(1_500)) == 1.5)
     }
 
     @Test func retryAfterHTTPDateReplacesGeneratedDelay() {
@@ -207,15 +213,13 @@ struct RetryPolicyTests {
         #expect(
             policy.delay(
                 0.5,
-                retryAfter: "Wed, 21 Oct 2015 07:28:05 GMT",
-                now: now
+                retryAfter: DecisionError.retryAfter(from: "Wed, 21 Oct 2015 07:28:05 GMT", now: now)
             ) == 5
         )
         #expect(
             policy.delay(
                 0.5,
-                retryAfter: "Wed, 21 Oct 2015 07:27:00 GMT",
-                now: now
+                retryAfter: DecisionError.retryAfter(from: "Wed, 21 Oct 2015 07:27:00 GMT", now: now)
             ) == 0
         )
     }
@@ -223,7 +227,64 @@ struct RetryPolicyTests {
     @Test func invalidRetryAfterUsesGeneratedDelay() {
         let policy = RetryPolicy(maximumInterval: 8)
 
-        #expect(policy.delay(1, retryAfter: "soon") == 1)
+        #expect(DecisionError.retryAfter(from: "soon", now: Date()) == nil)
+        #expect(policy.delay(1, retryAfter: nil) == 1)
+    }
+
+    @Test func retryAfterWithoutMaximumIntervalIsNotLimited() {
+        let policy = RetryPolicy(maximumInterval: nil)
+
+        #expect(policy.delay(0.5, retryAfter: .seconds(3_600)) == 3_600)
+    }
+
+    // MARK: - Retry decisions
+
+    /// The retry decision for every status code matches version 0.9,
+    /// which retried a `requestFailed` error whose status code is in `retryableStatusCodes`.
+    @Test(
+        arguments: [
+            RetryPolicy.default,
+            RetryPolicy.never,
+            RetryPolicy(retryableStatusCodes: []),
+            RetryPolicy(retryableStatusCodes: [408, 500, 502, 504]),
+            RetryPolicy(retryableStatusCodes: Set(100 ..< 600)),
+        ]
+    )
+    func statusCodeDecidesRetry(policy: RetryPolicy) {
+        for statusCode in 100 ..< 600 {
+            let error = DecisionError.requestFailed(
+                statusCode: statusCode,
+                detail: "",
+                headers: ["Retry-After": "1"]
+            )
+            #expect(
+                policy.shouldRetry(error) == policy.retryableStatusCodes.contains(statusCode),
+                "status \(statusCode)"
+            )
+        }
+    }
+
+    /// The policy's status codes override the error's advice.
+    @Test func statusCodesOverrideIsRetryable() {
+        let timeout = DecisionError.requestFailed(statusCode: 504, detail: "", headers: [:])
+        #expect(timeout.isRetryable)
+        #expect(!RetryPolicy.default.shouldRetry(timeout))
+
+        let serverError = DecisionError.requestFailed(statusCode: 500, detail: "", headers: [:])
+        #expect(!serverError.isRetryable)
+        #expect(RetryPolicy(retryableStatusCodes: [500]).shouldRetry(serverError))
+    }
+
+    @Test(
+        arguments: [
+            DecisionError(URLError(.timedOut)),
+            DecisionError(URLError(.networkConnectionLost)),
+            DecisionError(code: .rateLimited, message: "Slow down."),
+            DecisionError.invalidResponse("Not JSON."),
+        ]
+    )
+    func errorsWithoutStatusCodeAreNotRetried(error: DecisionError) {
+        #expect(!RetryPolicy(retryableStatusCodes: Set(100 ..< 600)).shouldRetry(error))
     }
 }
 

@@ -154,8 +154,8 @@ import Testing
             await #expect {
                 _ = try await model.modelDirectory(using: downloader, requiring: JointSchemaHead.fileNames)
             } throws: { error in
-                guard case DecisionError.modelUnavailable(let detail) = error else { return false }
-                return detail.contains("joint_head.safetensors")
+                guard let error = error as? DecisionError, error.code == .modelUnavailable else { return false }
+                return error.message.contains("joint_head.safetensors")
             }
             #expect(downloader.requestedPatterns == [JointSchemaHead.fileNames])
         }
@@ -336,8 +336,8 @@ import Testing
             await #expect {
                 _ = try await session.decide(questions)
             } throws: { error in
-                guard case DecisionError.unsupportedQuestion(let index, _) = error else { return false }
-                return index == 0
+                guard let error = error as? DecisionError, error.code == .unsupportedQuestion else { return false }
+                return error.questionIndex == 0
             }
         }
 
@@ -381,8 +381,8 @@ import Testing
             await #expect {
                 _ = try await session.decide(questions[0])
             } throws: { error in
-                guard case DecisionError.modelUnavailable(let detail) = error else { return false }
-                return detail.contains("joint_head.safetensors")
+                guard let error = error as? DecisionError, error.code == .modelUnavailable else { return false }
+                return error.message.contains("joint_head.safetensors")
             }
         }
 
@@ -392,8 +392,8 @@ import Testing
             await #expect {
                 _ = try await session.decide(questions[0])
             } throws: { error in
-                guard case DecisionError.modelUnavailable(let detail) = error else { return false }
-                return detail.contains("joint_head.safetensors")
+                guard let error = error as? DecisionError, error.code == .modelUnavailable else { return false }
+                return error.message.contains("joint_head.safetensors")
             }
         }
 
