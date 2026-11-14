@@ -516,7 +516,10 @@ with `decide(_ request: DecisionRequest)`,
 and read `request.questions` and `request.state`.
 The package has no adapter between the two requirements,
 so an executor with the old method no longer conforms.
-Callers need no change.
+Callers need no change:
+each `DecisionSession` method and the initializer keep their 0.9 signatures,
+which use the session's options,
+so calls and references to them as function values compile unchanged.
 
 ## Calibration and confidence
 
