@@ -402,6 +402,48 @@ struct GeminiDecisionModelTests {
         #expect(host.recorded.isEmpty)
     }
 
+    @Test func executorRejectsTooManyQuestionsBeforeRequest() async throws {
+        let host = StubURLProtocol.Host()
+        let executor = makeModel(host).makeExecutor()
+        let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
+        await #expect(
+            throws: DecisionError.unsupportedQuestion(
+                index: 1000,
+                reason: "Gemini accepts at most 1000 questions in one request, not 1001."
+            )
+        ) {
+            _ = try await executor.decide(questions, about: "state")
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func executorChecksStateBeforeQuestionCount() async throws {
+        let host = StubURLProtocol.Host()
+        let executor = makeModel(host).makeExecutor()
+        let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
+        await #expect(throws: DecisionError.unsupportedState("Gemini does not accept empty input.")) {
+            _ = try await executor.decide(questions, about: "  ")
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func sessionChecksQuestionCountBeforeGeminiState() async throws {
+        // A session checks capabilities before the executor's state checks,
+        // so the count error comes first, unlike a direct executor call.
+        let host = StubURLProtocol.Host()
+        let session = DecisionSession(model: makeModel(host), state: "  ")
+        let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
+        await #expect(
+            throws: DecisionError.unsupportedQuestion(
+                index: 1000,
+                reason: "GeminiDecisionModel accepts at most 1000 questions in one request, not 1001."
+            )
+        ) {
+            _ = try await session.decide(questions)
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
     @Test func rejectsChoiceWithOneOption() async throws {
         let host = StubURLProtocol.Host()
         let session = DecisionSession(model: makeModel(host), state: "state")
