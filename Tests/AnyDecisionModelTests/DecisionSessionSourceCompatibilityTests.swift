@@ -37,6 +37,42 @@ struct DecisionSessionSourceCompatibilityTests {
         #expect(model.received.withLock { $0.count } == 6)
     }
 
+    /// References without a type annotation resolve to the version 0.9 signatures,
+    /// because the overloads with `options:` are disfavored.
+    ///
+    /// A bare `session.decide` is not here:
+    /// version 0.9 has two `decide` methods,
+    /// so that reference was already ambiguous.
+    @Test func versionZeroNineSignaturesWorkAsInferredFunctionValues() async throws {
+        let model = ThresholdDecisionModel()
+        var options = DecisionOptions(cacheKey: "session")
+        options[custom: ThresholdDecisionModel.self] = .init(probability: 0.9)
+
+        let makeSession = DecisionSession.init
+        let makeSessionByName = DecisionSession.init(model:state:)
+        let session = makeSession(model, "ticket")
+        #expect(session.options == DecisionOptions())
+        #expect(makeSessionByName(model, "ticket").options == DecisionOptions())
+
+        let optionedSession = DecisionSession(model: model, state: "ticket", options: options)
+        let prewarm = optionedSession.prewarm
+        let probability = optionedSession.probability
+        let probabilityByName = optionedSession.probability(of:criteria:)
+        let choice = optionedSession.choice
+        let choiceByName = optionedSession.choice(_:from:)
+        let score = optionedSession.score
+        let scoreByName = optionedSession.score(_:levels:)
+
+        try await prewarm()
+        #expect(try await probability("A?", nil) == 0.9)
+        #expect(try await probabilityByName("B?", BinaryCriteria(whenTrue: "yes", whenFalse: "no")) == 0.9)
+        #expect(try await choice("C?", [ChoiceOption("x"), ChoiceOption("y")]).value == "x")
+        #expect(try await choiceByName("D?", [ChoiceOption("x"), ChoiceOption("y")]).value == "x")
+        #expect(try await score("E?", ["low", "high"]).levels == ["low", "high"])
+        #expect(try await scoreByName("F?", ["low", "high"]).levels == ["low", "high"])
+        #expect(model.received.withLock { $0.map(\.options) } == Array(repeating: options, count: 6))
+    }
+
     @Test func newSignaturesWorkAsFunctionValues() async throws {
         let model = ThresholdDecisionModel()
         let session = DecisionSession(model: model, state: "ticket")

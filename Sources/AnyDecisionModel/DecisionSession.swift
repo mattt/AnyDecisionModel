@@ -12,6 +12,9 @@ import Foundation
 /// Each method that takes `options:` has an overload without it,
 /// with the signature of version 0.9,
 /// which uses the session's options.
+/// The overloads with `options:` are disfavored,
+/// so a reference to a method without a type annotation,
+/// such as `session.score`, resolves to the version 0.9 signature.
 ///
 /// ```swift
 /// let model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
@@ -40,6 +43,7 @@ public final class DecisionSession: Sendable {
     ///   - state: The state that every question is about.
     ///   - options: The options to send with each request
     ///     that does not pass its own options.
+    @_disfavoredOverload
     public init(model: any DecisionModel, state: DecisionState, options: DecisionOptions) {
         self.model = model
         self.state = state
@@ -115,6 +119,7 @@ public final class DecisionSession: Sendable {
     ///   or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
     ///   A backend can also throw its own error for an option that it rejects.
+    @_disfavoredOverload
     public func decide(_ questions: [Question], options: DecisionOptions) async throws -> Response {
         try validate(questions)
         guard !questions.isEmpty else {
@@ -146,6 +151,7 @@ public final class DecisionSession: Sendable {
     /// - Returns: The answer.
     /// - Throws: ``DecisionError`` if the question is invalid or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
+    @_disfavoredOverload
     public func decide(_ question: Question, options: DecisionOptions) async throws -> Answer {
         try await decide([question], options: options).answers[0]
     }
@@ -168,6 +174,7 @@ public final class DecisionSession: Sendable {
     ///   - criteria: Optional descriptions of true and false answers.
     ///   - options: The options for this request.
     ///     They replace the session's ``options``; the two are not merged.
+    @_disfavoredOverload
     public func probability(
         of instructions: String,
         criteria: BinaryCriteria? = nil,
@@ -199,6 +206,7 @@ public final class DecisionSession: Sendable {
     ///   - type: The option type. It defaults to the inferred result type.
     ///   - options: The options for this request.
     ///     They replace the session's ``options``; the two are not merged.
+    @_disfavoredOverload
     public func choice<Option: Choosable>(
         _ instructions: String,
         from type: Option.Type = Option.self,
@@ -229,6 +237,7 @@ public final class DecisionSession: Sendable {
     ///   - choiceOptions: The options to choose from, in display order.
     ///   - options: The options for this request.
     ///     They replace the session's ``options``; the two are not merged.
+    @_disfavoredOverload
     public func choice(
         _ instructions: String,
         from choiceOptions: [ChoiceOption],
@@ -258,6 +267,7 @@ public final class DecisionSession: Sendable {
     ///   - levels: Level descriptions, from lowest to highest.
     ///   - options: The options for this request.
     ///     They replace the session's ``options``; the two are not merged.
+    @_disfavoredOverload
     public func score(
         _ instructions: String,
         levels: [String],
