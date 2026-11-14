@@ -4,7 +4,7 @@ import Foundation
 
 /// A batch decision request in the System One `/v1/systemone` wire format.
 ///
-/// Jev and Ollama both implement this format,
+/// Jev, Ollama, and other System One servers implement this format,
 /// so their backends share these types.
 struct SystemOneRequest: Encodable {
     /// The model identifier.
@@ -16,27 +16,45 @@ struct SystemOneRequest: Encodable {
     /// The questions, keyed by question identifier.
     var questions: [String: SystemOneQuestion]
 
-    /// How long to keep the model loaded after the request, in seconds.
+    /// Extra top-level fields, such as Ollama's `keep_alive`.
     ///
-    /// Only Ollama reads this field. `nil` omits it.
-    var keepAlive: TimeInterval?
+    /// The fields are encoded after the core fields.
+    /// A key that is also a core field is ignored,
+    /// so that it cannot replace the core field.
+    var extraBody: [String: JSONValue] = [:]
 
-    private enum CodingKeys: String, CodingKey {
-        case model
-        case state
-        case questions
-        case keepAlive = "keep_alive"
+    private struct FieldKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+
+        init(_ stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(stringValue: String) {
+            self.init(stringValue)
+        }
+
+        init?(intValue: Int) {
+            return nil
+        }
+
+        static let model = FieldKey("model")
+        static let state = FieldKey("state")
+        static let questions = FieldKey("questions")
     }
 
     func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
+        var container = encoder.container(keyedBy: FieldKey.self)
         try container.encode(model, forKey: .model)
         // Encode the JSON value, not the state's tagged `Codable` form,
         // so that every JSON state is sent unchanged.
         // A state with attachments throws, so that it is never uploaded.
         try container.encode(state.textOrJSONValue(), forKey: .state)
         try container.encode(questions, forKey: .questions)
-        try container.encodeIfPresent(keepAlive, forKey: .keepAlive)
+        for (key, value) in extraBody where !SystemOneDecisionModel.reservedBodyFields.contains(key) {
+            try container.encode(value, forKey: FieldKey(key))
+        }
     }
 }
 
@@ -142,6 +160,14 @@ struct SystemOneQuestion: Encodable {
 // MARK: - Response
 
 /// A batch decision response in the System One `/v1/systemone` wire format.
+///
+/// Some servers add fields that version 0.8 has no place for:
+/// a `confidence` on a `noul` answer,
+/// a `label_mass` on an answer,
+/// and `cached_tokens` and `cost` in `usage`.
+/// The decoder ignores these fields and every other unknown field.
+/// A `refusal` answer or an answer of an unknown type, such as `box`,
+/// fails to decode, as in version 0.8.
 struct SystemOneResponse: Decodable {
     /// The identifier of the model that answered.
     var model: String

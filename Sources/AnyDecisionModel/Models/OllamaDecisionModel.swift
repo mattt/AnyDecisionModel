@@ -8,6 +8,8 @@ import Foundation
 ///
 /// The model sends each batch to `POST /v1/systemone`
 /// and returns Ollama's probabilities and confidence values unchanged.
+/// It has the same configuration and behavior as
+/// ``SystemOneDecisionModel/ollama(modelID:baseURL:apiKey:keepAlive:session:)``.
 /// It needs Ollama v0.35.0 or later,
 /// or v0.40.5 or later for cloud models.
 ///
@@ -46,8 +48,7 @@ public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     /// `nil` uses the server's setting, which defaults to five minutes.
     public let keepAlive: TimeInterval?
 
-    private let tokenProvider: @Sendable () -> String?
-    private let urlSession: URLSession
+    private let base: SystemOneDecisionModel
 
     /// Creates an Ollama decision model.
     ///
@@ -68,9 +69,14 @@ public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     ) {
         self.modelID = modelID
         self.baseURL = baseURL
-        self.tokenProvider = tokenProvider
         self.keepAlive = keepAlive
-        self.urlSession = session
+        self.base = .ollama(
+            modelID: modelID,
+            baseURL: baseURL,
+            apiKey: tokenProvider(),
+            keepAlive: keepAlive,
+            session: session
+        )
     }
 
     /// Returns the API key from the environment, or `nil` if none is set.
@@ -88,7 +94,7 @@ public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     }
 
     public var capabilities: DecisionCapabilities {
-        DecisionCapabilities(probabilitySource: .unspecified)
+        base.capabilities
     }
 
     public var description: String {
@@ -96,56 +102,6 @@ public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     }
 
     public func makeExecutor() -> any DecisionModelExecutor {
-        Executor(model: self)
-    }
-
-    private struct Executor: DecisionModelExecutor {
-        let model: OllamaDecisionModel
-
-        func decide(_ questions: [Question], about state: DecisionState) async throws
-            -> DecisionSession.Response
-        {
-            // Ollama keys questions and answers by identifier. Use each question's position.
-            let keys = questions.indices.map(String.init)
-            let request = SystemOneRequest(
-                model: model.modelID,
-                state: state,
-                questions: Dictionary(uniqueKeysWithValues: zip(keys, questions.map(SystemOneQuestion.init))),
-                keepAlive: model.keepAlive
-            )
-            let response = try await model.send(request)
-            let answers = try keys.map { key in
-                guard let answer = response.answers[key] else {
-                    throw DecisionError.invalidResponse("No answer for the question at index \(key).")
-                }
-                return answer.answer
-            }
-            return DecisionSession.Response(
-                modelID: response.model,
-                answers: answers,
-                usage: DecisionSession.Usage(
-                    inputTokenCount: response.usage?.inputTokenCount ?? 0,
-                    outputTokenCount: response.usage?.outputTokenCount ?? 0
-                )
-            )
-        }
-    }
-
-    /// Sends a request and returns the decoded response.
-    private func send(_ request: SystemOneRequest) async throws -> SystemOneResponse {
-        let url = baseURL.appendingPathComponent("v1").appendingPathComponent("systemone")
-        let body = try JSONEncoder().encode(request)
-
-        var headers: [String: String] = [:]
-        if let apiKey = tokenProvider(), !apiKey.isEmpty {
-            headers["Authorization"] = "Bearer \(apiKey)"
-        }
-
-        let (data, _) = try await urlSession.send(.post, url: url, headers: headers, body: body)
-        do {
-            return try JSONDecoder().decode(SystemOneResponse.self, from: data)
-        } catch {
-            throw DecisionError.invalidResponse(String(describing: error))
-        }
+        base.makeExecutor()
     }
 }
