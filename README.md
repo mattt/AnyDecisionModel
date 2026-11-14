@@ -203,7 +203,7 @@ Pass `directory:` to load a model from disk.
 
 For each question, the model builds a prompt with the state, the question,
 and a one-token label for each allowed answer,
-then reads the probability of each label from a single forward pass.
+then reads the probability of each label as the next token after the prompt.
 Binary questions use "yes" and "no",
 choices use A to Z, and scores use 0 to 9.
 So a choice can have at most 26 options and a score at most 10 levels.
