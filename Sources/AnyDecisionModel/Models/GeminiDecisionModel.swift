@@ -127,9 +127,12 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
             if let feedback = response.promptFeedback, let reason = feedback.blockReason {
                 throw DecisionError.inputBlocked(reason: reason, message: feedback.blockReasonMessage)
             }
-            let answers = try keys.map { key in
+            let answers = try zip(questions.indices, keys).map { index, key in
                 guard let answer = response.answers[key] else {
-                    throw DecisionError.invalidResponse("No answer for the question at index \(key).")
+                    throw DecisionError.invalidResponse(
+                        "No answer for the question at index \(index).",
+                        questionIndex: index
+                    )
                 }
                 return answer.answer
             }
@@ -333,7 +336,15 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
         }
 
         let url = baseURL.appendingPathComponent("v1beta").appendingPathComponent("decisions")
-        let body = try JSONEncoder().encode(request)
+        let body: Data
+        do {
+            body = try JSONEncoder().encode(request)
+        } catch let error as DecisionError {
+            // The encoder rejects a state that the model can't read.
+            throw error
+        } catch {
+            throw DecisionError.encodingFailed(error)
+        }
         let headers = ["x-goog-api-key": apiKey]
 
         let data: Data
@@ -345,7 +356,7 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
         do {
             return try JSONDecoder().decode(GeminiResponse.self, from: data)
         } catch {
-            throw DecisionError.invalidResponse(String(describing: error))
+            throw DecisionError.decodingFailed(error)
         }
     }
 
@@ -354,16 +365,23 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
     /// Gemini reports a blocked input as HTTP 400
     /// with a string error code, such as `safety`.
     /// That error becomes ``DecisionError/inputBlocked(reason:message:)``,
-    /// without a ``DecisionError/response``,
-    /// so that it equals the error that version 0.9 threw.
+    /// with the kind ``DecisionError/Kind/guardrailViolation``
+    /// and the response and body.
     /// Any other error is returned unchanged.
     static func error(_ error: DecisionError) -> DecisionError {
-        if let response = error.response, response.statusCode == 400,
-            let body = try? JSONDecoder().decode(GeminiErrorBody.self, from: Data(response.body.utf8)),
+        if error.response?.status.code == 400, let data = error.body,
+            let body = try? JSONDecoder().decode(GeminiErrorBody.self, from: data),
             let reason = body.error?.code,
             blockReasons.contains(reason)
         {
-            return .inputBlocked(reason: reason, message: body.error?.message)
+            let blocked = DecisionError.inputBlocked(reason: reason, message: body.error?.message)
+            return DecisionError(
+                kind: blocked.kind,
+                message: blocked.message,
+                reason: reason,
+                response: error.response,
+                body: error.body
+            )
         }
         return error
     }

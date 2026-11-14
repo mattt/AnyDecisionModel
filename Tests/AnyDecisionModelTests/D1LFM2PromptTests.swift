@@ -198,8 +198,8 @@ struct D1LFM2PromptTests {
     }
 
     @Test func aliasesThrowWhenNoCodeIsLeft() {
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 2,
                 reason: "No single-token option code is left for 2 options."
             )
@@ -212,8 +212,8 @@ struct D1LFM2PromptTests {
         #expect(throws: DecisionError.self) {
             try D1LFM2Prompt.render(.binary(instructions: "Yes?"), index: 0, encode: { _ in [1, 2] })
         }
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1,
                 reason: "The score level 0 has no single-token digit."
             )

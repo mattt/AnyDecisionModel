@@ -194,7 +194,7 @@ struct SystemOneDecisionModelTests {
         let session = DecisionSession(model: try makeModel(host), state: state)
 
         let expected = DecisionError.unsupportedState("SystemOneDecisionModel does not support image attachments.")
-        await #expect(throws: expected) {
+        await expectDecisionError(expected) {
             _ = try await session.probability(of: "Is this urgent?")
         }
         #expect(host.recorded.isEmpty)
@@ -330,8 +330,8 @@ struct SystemOneDecisionModelTests {
             _ = try await session.probability(of: "Is this urgent?")
             Issue.record("Expected the request to fail.")
         } catch let error as DecisionError {
-            #expect(error.code == .rateLimited)
-            #expect(error.response?.statusCode == 429)
+            #expect(error.kind == .rateLimited)
+            #expect(error.response?.status.code == 429)
         }
         #expect(host.recorded.count == 1)
     }
@@ -399,7 +399,7 @@ struct SystemOneDecisionModelTests {
             #"{"type": "refusal"}"#,
         ]
     )
-    func refusalThrowsInvalidResponse(answer: String) async throws {
+    func refusalThrowsDecodingError(answer: String) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(
             json: #"{"model": "m", "answers": {"0": {"type": "noul", "noul": 0.5}, "1": \#(answer)}}"#
@@ -409,11 +409,11 @@ struct SystemOneDecisionModelTests {
         do {
             _ = try await session.decide([.binary(instructions: "A?"), .binary(instructions: "B?")])
             Issue.record("Expected an error.")
-        } catch let error as DecisionError where error.code == .invalidResponse {
+        } catch let error as DecisionError where error.kind == .decodingError {
         }
     }
 
-    @Test func unknownAnswerTypeThrowsInvalidResponse() async throws {
+    @Test func unknownAnswerTypeThrowsDecodingError() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(
             json: #"{"model": "m", "answers": {"0": {"type": "box", "box": [0.1, 0.2, 0.3, 0.4]}}}"#
@@ -423,7 +423,7 @@ struct SystemOneDecisionModelTests {
         do {
             _ = try await session.decide(.binary(instructions: "Where is the dog?"))
             Issue.record("Expected an error.")
-        } catch let error as DecisionError where error.code == .invalidResponse {
+        } catch let error as DecisionError where error.kind == .decodingError {
         }
     }
 
@@ -465,7 +465,7 @@ struct SystemOneDecisionModelTests {
         )
         let session = DecisionSession(model: model, state: "ticket")
 
-        await #expect(throws: DecisionError.missingCredentials) {
+        await expectDecisionError(DecisionError.missingCredentials) {
             _ = try await session.probability(of: "Is this urgent?")
         }
         #expect(host.recorded.isEmpty)
@@ -796,7 +796,7 @@ extension SystemOneDecisionModelTests {
         let expected = DecisionError.unsupportedOption(
             "CustomOptions.extraBody cannot set the reserved field \"\(key)\"."
         )
-        await #expect(throws: expected) {
+        await expectDecisionError(expected) {
             _ = try await session.decide(
                 [.binary(instructions: "Is this urgent?")],
                 options: systemOneOptions(extraBody: [key: "x", "seed": 1])
@@ -814,7 +814,7 @@ extension SystemOneDecisionModelTests {
         let expected = DecisionError.unsupportedOption(
             "CustomOptions.extraHeaders cannot set the reserved header \"\(name)\"."
         )
-        await #expect(throws: expected) {
+        await expectDecisionError(expected) {
             _ = try await session.decide(
                 [.binary(instructions: "Is this urgent?")],
                 options: systemOneOptions(extraHeaders: [name: "x", "traceparent": "y"])
@@ -995,8 +995,8 @@ struct SystemOneDecisionModelImageTests {
         #expect(model.capabilities.supportedAttachmentKinds.isEmpty)
         let session = DecisionSession(model: model, state: Self.photoState)
 
-        await #expect(
-            throws: DecisionError.unsupportedState("SystemOneDecisionModel does not support image attachments.")
+        await expectDecisionError(
+            DecisionError.unsupportedState("SystemOneDecisionModel does not support image attachments.")
         ) {
             _ = try await session.probability(of: "Is the item damaged?")
         }
@@ -1032,8 +1032,8 @@ struct SystemOneDecisionModelImageTests {
         ])
         let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: state)
 
-        await #expect(
-            throws: DecisionError.unsupportedState(
+        await expectDecisionError(
+            DecisionError.unsupportedState(
                 "SystemOneDecisionModel does not support \(kind.rawValue) attachments."
             )
         ) {
@@ -1051,8 +1051,8 @@ struct SystemOneDecisionModelImageTests {
         ])
         let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: state)
 
-        await #expect(
-            throws: DecisionError.unsupportedState(
+        await expectDecisionError(
+            DecisionError.unsupportedState(
                 "SystemOneDecisionModel does not send attachment URLs. Pass the image bytes as data."
             )
         ) {
@@ -1068,8 +1068,8 @@ struct SystemOneDecisionModelImageTests {
         ])
         let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .base64), state: state)
 
-        await #expect(
-            throws: DecisionError.unsupportedState("SystemOneDecisionModel does not send an empty image attachment.")
+        await expectDecisionError(
+            DecisionError.unsupportedState("SystemOneDecisionModel does not send an empty image attachment.")
         ) {
             _ = try await session.probability(of: "Is the item damaged?")
         }
@@ -1090,9 +1090,9 @@ struct SystemOneDecisionModelImageTests {
             _ = try await session.probability(of: "Is the item damaged?")
             Issue.record("Expected the request to fail.")
         } catch let error as DecisionError {
-            #expect(error.code == .requestFailed)
-            #expect(error.response?.statusCode == 501)
-            #expect(error.response?.body.contains("image input is not supported") == true)
+            #expect(error.kind == .httpError)
+            #expect(error.response?.status.code == 501)
+            #expect(error.bodyText?.contains("image input is not supported") == true)
         }
         #expect(host.recorded.count == 1)
     }
@@ -1110,7 +1110,7 @@ struct SystemOneDecisionModelImageTests {
         let expected = DecisionError.unsupportedOption(
             "CustomOptions.extraBody cannot set the reserved field \"images\"."
         )
-        await #expect(throws: expected) {
+        await expectDecisionError(expected) {
             _ = try await session.probability(of: "Is this urgent?", options: options)
         }
         #expect(host.recorded.isEmpty)

@@ -43,8 +43,8 @@ struct DecisionCapabilitiesTests {
         let capabilities = DecisionCapabilities(maximumQuestions: 2)
         let question = Question.binary(instructions: "x")
         try capabilities.validate(Array(repeating: question, count: 2), about: "ticket")
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 2,
                 reason: "The model accepts at most 2 questions in one request, not 3."
             )
@@ -56,8 +56,8 @@ struct DecisionCapabilitiesTests {
     @Test func validatesChoiceOptionsAtAndOverLimit() throws {
         let capabilities = DecisionCapabilities(maximumChoiceOptions: 3)
         try capabilities.validate([.choice(instructions: "x", options: options(3))], about: "ticket")
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 0,
                 reason: "The model supports at most 3 choice options, not 4."
             )
@@ -69,8 +69,8 @@ struct DecisionCapabilitiesTests {
     @Test func validatesScoreLevelsAtAndOverLimit() throws {
         let capabilities = DecisionCapabilities(maximumScoreLevels: 3)
         try capabilities.validate([.score(instructions: "x", levels: levels(3))], about: "ticket")
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 0,
                 reason: "The model supports at most 3 score levels, not 4."
             )
@@ -82,14 +82,14 @@ struct DecisionCapabilitiesTests {
     @Test func validatesAttachmentCountAtAndOverLimit() throws {
         let capabilities = DecisionCapabilities(supportedAttachmentKinds: [.image], maximumAttachments: 2)
         try capabilities.validate([], about: state(attachments: 2))
-        #expect(throws: DecisionError.unsupportedState("The model supports at most 2 attachments, not 3.")) {
+        expectDecisionError(DecisionError.unsupportedState("The model supports at most 2 attachments, not 3.")) {
             try capabilities.validate([], about: state(attachments: 3))
         }
     }
 
     @Test func validatesAttachmentKinds() throws {
         try DecisionCapabilities(supportedAttachmentKinds: [.image]).validate([], about: state(attachments: 1))
-        #expect(throws: DecisionError.unsupportedState("The model does not support image attachments.")) {
+        expectDecisionError(DecisionError.unsupportedState("The model does not support image attachments.")) {
             try DecisionCapabilities(supportedAttachmentKinds: [.audio]).validate([], about: state(attachments: 1))
         }
     }
@@ -101,8 +101,8 @@ struct DecisionCapabilitiesTests {
             .choice(instructions: "x", options: options(2)),
         ]
         try capabilities.validate(questions, about: "ticket")
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1,
                 reason: "The model does not support score questions."
             )
@@ -132,11 +132,11 @@ struct DecisionCapabilitiesTests {
             .binary(instructions: "x"),
             .choice(instructions: "x", options: options(3)),
         ]
-        #expect(throws: DecisionError.unsupportedState("The model does not support image attachments.")) {
+        expectDecisionError(DecisionError.unsupportedState("The model does not support image attachments.")) {
             try capabilities.validate(questions, about: state(attachments: 1))
         }
-        #expect(
-            throws: DecisionError.unsupportedQuestion(
+        expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1,
                 reason: "The model supports at most 2 choice options, not 3."
             )
@@ -173,8 +173,8 @@ struct DecisionSessionCapabilitiesTests {
         let session = DecisionSession(model: model, state: "ticket")
         let question = Question.binary(instructions: "x")
         _ = try await session.decide(Array(repeating: question, count: 2))
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 2,
                 reason: "FixedDecisionModel accepts at most 2 questions in one request, not 3."
             )
@@ -187,8 +187,8 @@ struct DecisionSessionCapabilitiesTests {
     @Test func rejectsUnsupportedQuestionKindBeforeCallingModel() async throws {
         let model = makeModel(DecisionCapabilities(questionKinds: [.binary]))
         let session = DecisionSession(model: model, state: "ticket")
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 0,
                 reason: "The model does not support choice questions."
             )
@@ -202,13 +202,13 @@ struct DecisionSessionCapabilitiesTests {
         let model = makeModel(DecisionCapabilities(supportedAttachmentKinds: [.image], maximumAttachments: 1))
         let session = DecisionSession(model: model, state: state(attachments: 2))
         let error = DecisionError.unsupportedState("FixedDecisionModel supports at most 1 attachment, not 2.")
-        await #expect(throws: error) {
+        await expectDecisionError(error) {
             try await session.prewarm()
         }
-        await #expect(throws: error) {
+        await expectDecisionError(error) {
             _ = try await session.decide([])
         }
-        await #expect(throws: error) {
+        await expectDecisionError(error) {
             _ = try await session.probability(of: "x")
         }
         #expect(model.prewarmed.withLock { $0.isEmpty })
@@ -220,8 +220,8 @@ struct DecisionSessionCapabilitiesTests {
         let session = DecisionSession(model: model, state: "ticket")
 
         // An unsupported question comes before a later invalid question.
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 0,
                 reason: "The model supports at most 2 choice options, not 3."
             )
@@ -233,8 +233,8 @@ struct DecisionSessionCapabilitiesTests {
         }
 
         // An invalid question comes before the question count.
-        await #expect(
-            throws: DecisionError.invalidQuestion(index: 1, reason: "The instructions are empty.")
+        await expectDecisionError(
+            DecisionError.invalidQuestion(index: 1, reason: "The instructions are empty.")
         ) {
             _ = try await session.decide([.binary(instructions: "x"), .binary(instructions: " ")])
         }

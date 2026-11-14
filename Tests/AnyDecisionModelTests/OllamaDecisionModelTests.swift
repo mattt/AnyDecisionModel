@@ -157,9 +157,9 @@ struct OllamaDecisionModelTests {
             _ = try await session.probability(of: "Is this urgent?")
             Issue.record("Expected the request to fail.")
         } catch let error as DecisionError {
-            #expect(error.code == .requestFailed)
-            #expect(error.response?.statusCode == 404)
-            #expect(error.response?.body.contains("not found") == true)
+            #expect(error.kind == .httpError)
+            #expect(error.response?.status.code == 404)
+            #expect(error.bodyText?.contains("not found") == true)
         }
     }
 
@@ -172,7 +172,9 @@ struct OllamaDecisionModelTests {
         )
         let session = DecisionSession(model: makeModel(host), state: "ticket")
 
-        await #expect(throws: DecisionError.invalidResponse("No answer for the question at index 0.")) {
+        await expectDecisionError(
+            DecisionError.invalidResponse("No answer for the question at index 0.", questionIndex: 0)
+        ) {
             _ = try await session.probability(of: "Is this urgent?")
         }
     }
@@ -253,8 +255,8 @@ struct OllamaDecisionModelTests {
         )
         let session = DecisionSession(model: makeModel(host), state: "ticket")
 
-        await #expect(
-            throws: DecisionError.invalidResponse("Question at index 0: The probabilities sum to 1.5, not 1.")
+        await expectDecisionError(
+            DecisionError.invalidResponse("Question at index 0: The probabilities sum to 1.5, not 1.", questionIndex: 0)
         ) {
             _ = try await session.score("How urgent is this?", levels: ["Routine", "Soon", "Immediate"])
         }

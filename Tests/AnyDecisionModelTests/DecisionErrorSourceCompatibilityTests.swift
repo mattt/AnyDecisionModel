@@ -7,7 +7,9 @@ import AnyDecisionModel
 
 /// Checks that code that creates a version 0.9 `DecisionError` still compiles,
 /// including references to the 0.9 cases as function values,
-/// and that equality checks against those values still match.
+/// and that the 0.9 spellings of `DecisionKind` and `ProbabilitySource` still compile.
+/// Version 0.10 has the same cases and spellings,
+/// so these checks cover it too.
 @Suite("DecisionError source compatibility")
 struct DecisionErrorSourceCompatibilityTests {
     @Test func versionZeroNineThrowSitesCompile() {
@@ -24,35 +26,36 @@ struct DecisionErrorSourceCompatibilityTests {
             }
         }
 
-        let codes = (0 ..< 8).map { make($0).code }
+        let kinds = (0 ..< 8).map { make($0).kind }
         #expect(
-            codes == [
+            kinds == [
                 .invalidQuestion, .unsupportedQuestion, .unsupportedState, .missingCredentials,
-                .requestFailed, .inputBlocked, .invalidResponse, .modelUnavailable,
+                .httpError, .guardrailViolation, .invalidResponse, .modelUnavailable,
             ]
         )
     }
 
     @Test func versionZeroNineThrowStatementsCompile() {
-        #expect(throws: DecisionError.missingCredentials) { throw DecisionError.missingCredentials }
-        #expect(throws: DecisionError.invalidQuestion(index: 0, reason: "Empty.")) {
-            throw DecisionError.invalidQuestion(index: 0, reason: "Empty.")
-        }
-        #expect(throws: DecisionError.requestFailed(statusCode: 429, detail: "", headers: [:])) {
+        #expect(throws: DecisionError.self) { throw DecisionError.missingCredentials }
+        #expect(throws: DecisionError.self) { throw DecisionError.invalidQuestion(index: 0, reason: "Empty.") }
+        #expect(throws: DecisionError.self) {
             throw DecisionError.requestFailed(statusCode: 429, detail: "", headers: [:])
         }
-        #expect(throws: DecisionError.inputBlocked(reason: "safety", message: "Blocked.")) {
-            throw DecisionError.inputBlocked(reason: "safety", message: "Blocked.")
-        }
+        #expect(throws: DecisionError.self) { throw DecisionError.inputBlocked(reason: "safety", message: "Blocked.") }
         #expect(throws: DecisionError.self) { throw DecisionError.unsupportedState("x") }
     }
 
-    @Test func versionZeroNineEqualityChecksMatch() {
-        let error: any Error = DecisionError.missingCredentials
-        #expect(error as? DecisionError == .missingCredentials)
-        #expect(error as? DecisionError != .invalidResponse("x"))
-        #expect(DecisionError.invalidResponse("x") == DecisionError.invalidResponse("x"))
-        #expect(DecisionError.unsupportedState("x") != DecisionError.unsupportedState("y"))
+    /// The replacement for `#expect(throws: DecisionError.missingCredentials)`,
+    /// which no longer compiles because `DecisionError` is not `Equatable`.
+    @Test func kindComparisonReplacesEquality() {
+        #expect {
+            throw DecisionError.missingCredentials
+        } throws: { error in
+            (error as? DecisionError)?.kind == .missingCredentials
+        }
+        let error: any Error = DecisionError.invalidResponse("x")
+        #expect((error as? DecisionError)?.kind == .invalidResponse)
+        #expect((error as? DecisionError)?.message == DecisionError.invalidResponse("x").message)
     }
 
     /// References with a type annotation resolve to the 0.9 factories.
@@ -67,15 +70,19 @@ struct DecisionErrorSourceCompatibilityTests {
         let modelUnavailable: (String) -> DecisionError = DecisionError.modelUnavailable
         let missingCredentials: DecisionError = DecisionError.missingCredentials
 
-        #expect(invalidQuestion(1, "a") == .invalidQuestion(index: 1, reason: "a"))
-        #expect(unsupportedQuestion(1, "a") == .unsupportedQuestion(index: 1, reason: "a"))
-        #expect(unsupportedState("a") == .unsupportedState("a"))
-        #expect(requestFailed(404, "a", [:]) == .requestFailed(statusCode: 404, detail: "a", headers: [:]))
-        #expect(inputBlocked("safety", nil) == .inputBlocked(reason: "safety", message: nil))
-        #expect(invalidResponse("a") == .invalidResponse("a"))
-        #expect(modelUnavailable("a") == .modelUnavailable("a"))
-        #expect(missingCredentials == .missingCredentials)
-        #expect(["a", "b"].map(DecisionError.invalidResponse) == [.invalidResponse("a"), .invalidResponse("b")])
+        #expect(invalidQuestion(1, "a").questionIndex == 1)
+        #expect(unsupportedQuestion(1, "a").kind == .unsupportedQuestion)
+        #expect(unsupportedState("a").message == "Unsupported state: a")
+        #expect(requestFailed(404, "a", [:]).response?.status.code == 404)
+        #expect(inputBlocked("safety", nil).reason == "safety")
+        #expect(invalidResponse("a").kind == .invalidResponse)
+        #expect(modelUnavailable("a").kind == .modelUnavailable)
+        #expect(missingCredentials.kind == .missingCredentials)
+        #expect(
+            ["a", "b"].map(DecisionError.invalidResponse).map(\.message) == [
+                "Invalid response: a", "Invalid response: b",
+            ]
+        )
     }
 
     /// References without a type annotation resolve to the 0.9 factories.
@@ -90,10 +97,10 @@ struct DecisionErrorSourceCompatibilityTests {
         let modelUnavailable = DecisionError.modelUnavailable
         let missingCredentials = DecisionError.missingCredentials
 
-        #expect(invalidQuestion(1, "a") == invalidQuestionByName(1, "a"))
+        #expect(invalidQuestion(1, "a").message == invalidQuestionByName(1, "a").message)
         #expect(unsupportedQuestion(1, "a").questionIndex == 1)
-        #expect(unsupportedState("a").code == .unsupportedState)
-        #expect(requestFailed(429, "a", ["Retry-After": "1"]).code == .rateLimited)
+        #expect(unsupportedState("a").kind == .unsupportedState)
+        #expect(requestFailed(429, "a", ["Retry-After": "1"]).kind == .rateLimited)
         #expect(inputBlocked("safety", "Blocked.").reason == "safety")
         #expect(invalidResponse("a").message == "Invalid response: a")
         #expect(modelUnavailable("a").message == "Model unavailable: a")
@@ -101,16 +108,16 @@ struct DecisionErrorSourceCompatibilityTests {
     }
 
     /// The replacements for 0.9 patterns that match cases.
-    @Test func versionZeroTenMatchingCompiles() {
+    @Test func versionZeroElevenMatchingCompiles() {
         func classify(_ error: any Error) -> String {
             do {
                 throw error
-            } catch let error as DecisionError where error.code == .rateLimited {
-                return "rate limited \(error.response?.statusCode ?? 0) \(error.retryAfter ?? .zero)"
+            } catch let error as DecisionError where error.kind == .rateLimited {
+                return "rate limited \(error.response?.status.code ?? 0) \(error.retryAfter ?? .zero)"
             } catch let error as DecisionError where error.response != nil {
-                return "status \(error.response?.statusCode ?? 0)"
+                return "status \(error.response?.status.code ?? 0)"
             } catch let error as DecisionError {
-                switch error.code {
+                switch error.kind {
                 case .invalidQuestion, .unsupportedQuestion:
                     return "question \(error.questionIndex ?? -1)"
                 case .missingCredentials:
@@ -118,6 +125,8 @@ struct DecisionErrorSourceCompatibilityTests {
                 default:
                     return "other"
                 }
+            } catch let error as URLError {
+                return "transport \(error.code.rawValue)"
             } catch {
                 return "unknown"
             }
@@ -131,6 +140,30 @@ struct DecisionErrorSourceCompatibilityTests {
         #expect(classify(DecisionError.unsupportedQuestion(index: 3, reason: "")) == "question 3")
         #expect(classify(DecisionError.missingCredentials) == "credentials")
         #expect(classify(DecisionError.modelUnavailable("")) == "other")
+        #expect(classify(URLError(.timedOut)) == "transport \(URLError.Code.timedOut.rawValue)")
         #expect(classify(CancellationError()) == "unknown")
+    }
+
+    /// Version 0.9 spellings of the kinds and sources compile,
+    /// including `switch` statements with a `default` case and `rawValue`.
+    @Test func versionZeroNineKindAndSourceSpellingsCompile() {
+        func name(_ kind: DecisionKind) -> String {
+            switch kind {
+            case .binary: return "yes or no"
+            case .choice: return "one of many"
+            case .score: return "a level"
+            default: return kind.rawValue
+            }
+        }
+        #expect([DecisionKind.binary, .choice, .score].map(name) == ["yes or no", "one of many", "a level"])
+        #expect(Question.binary(instructions: "A?").kind == .binary)
+        #expect(DecisionKind(rawValue: "score") == .score)
+        let kinds: Set<DecisionKind> = [.binary, .choice]
+        #expect(DecisionCapabilities(questionKinds: kinds).questionKinds.contains(.choice))
+
+        let source: DecisionCapabilities.ProbabilitySource = .native
+        #expect(source.rawValue == "native")
+        #expect(DecisionCapabilities.ProbabilitySource(rawValue: "estimated") == .estimated)
+        #expect(DecisionCapabilities(probabilitySource: .unspecified).probabilitySource == .unspecified)
     }
 }

@@ -154,7 +154,7 @@ import Testing
             await #expect {
                 _ = try await model.modelDirectory(using: downloader, requiring: JointSchemaHead.fileNames)
             } throws: { error in
-                guard let error = error as? DecisionError, error.code == .modelUnavailable else { return false }
+                guard let error = error as? DecisionError, error.kind == .modelUnavailable else { return false }
                 return error.message.contains("joint_head.safetensors")
             }
             #expect(downloader.requestedPatterns == [JointSchemaHead.fileNames])
@@ -336,7 +336,7 @@ import Testing
             await #expect {
                 _ = try await session.decide(questions)
             } throws: { error in
-                guard let error = error as? DecisionError, error.code == .unsupportedQuestion else { return false }
+                guard let error = error as? DecisionError, error.kind == .unsupportedQuestion else { return false }
                 return error.questionIndex == 0
             }
         }
@@ -381,7 +381,7 @@ import Testing
             await #expect {
                 _ = try await session.decide(questions[0])
             } throws: { error in
-                guard let error = error as? DecisionError, error.code == .modelUnavailable else { return false }
+                guard let error = error as? DecisionError, error.kind == .modelUnavailable else { return false }
                 return error.message.contains("joint_head.safetensors")
             }
         }
@@ -392,7 +392,7 @@ import Testing
             await #expect {
                 _ = try await session.decide(questions[0])
             } throws: { error in
-                guard let error = error as? DecisionError, error.code == .modelUnavailable else { return false }
+                guard let error = error as? DecisionError, error.kind == .modelUnavailable else { return false }
                 return error.message.contains("joint_head.safetensors")
             }
         }

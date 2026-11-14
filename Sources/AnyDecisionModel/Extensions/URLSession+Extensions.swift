@@ -2,6 +2,8 @@
 // Copyright AnyLanguageModel contributors. Licensed under the Apache License, Version 2.0.
 
 import Foundation
+import HTTPTypes
+import HTTPTypesFoundation
 
 #if canImport(FoundationNetworking)
     import FoundationNetworking
@@ -13,26 +15,32 @@ enum HTTP {
         case post = "POST"
     }
 
-    /// Returns text with the credentials in request headers replaced.
+    /// Returns data with the credentials in request headers replaced.
     ///
     /// The credentials are the values of the headers in
-    /// ``DecisionError/HTTPResponse/credentialHeaders``,
+    /// ``DecisionError/credentialHeaders``,
     /// and the token after the scheme in a value such as `Bearer token`.
-    static func redactingCredentials(in text: String, requestHeaders: [String: String]) -> String {
+    static func redactingCredentials(in data: Data, requestHeaders: [String: String]) -> Data {
+        let names = Set(DecisionError.credentialHeaders.map(\.canonicalName))
         var secrets: Set<String> = []
-        for (name, value) in requestHeaders
-        where DecisionError.HTTPResponse.credentialHeaders.contains(name.lowercased()) {
+        for (name, value) in requestHeaders where names.contains(name.lowercased()) {
             secrets.insert(value)
             if let space = value.firstIndex(of: " ") {
                 secrets.insert(String(value[value.index(after: space)...]).trimmingCharacters(in: .whitespaces))
             }
         }
         // Replace longer values first, so a token inside a full header value doesn't split it.
-        var text = text
-        for secret in secrets.sorted(by: { $0.count > $1.count }) where !secret.isEmpty {
-            text = text.replacingOccurrences(of: secret, with: DecisionError.HTTPResponse.redactedValue)
+        let replacement = Data(DecisionError.redactedValue.utf8)
+        var data = data
+        for secret in secrets.sorted(by: { $0.utf8.count > $1.utf8.count }) where !secret.isEmpty {
+            let bytes = Data(secret.utf8)
+            var start = data.startIndex
+            while let range = data.range(of: bytes, in: start ..< data.endIndex) {
+                data.replaceSubrange(range, with: replacement)
+                start = range.lowerBound + replacement.count
+            }
         }
-        return text
+        return data
     }
 }
 
@@ -118,16 +126,20 @@ enum HTTP {
 extension URLSession {
     /// Sends a request and returns the body and response.
     ///
-    /// The values of credential headers in `headers`,
-    /// such as `Authorization`,
-    /// never appear in an error.
+    /// For a status code outside 200 to 299,
+    /// the values of credential headers in `headers`, such as `Authorization`,
+    /// are replaced in the error's body,
+    /// and the values of credential headers in the error's response are replaced.
+    /// Other response headers are kept as they are.
     ///
-    /// - Throws: ``DecisionError/requestFailed(statusCode:detail:headers:)``
-    ///   for a status code outside 200 to 299, with the response headers,
+    /// A request that fails on the way, or that is cancelled,
+    /// throws the URL session's own `URLError`.
+    ///
+    /// - Throws: A ``DecisionError`` with the response and body
+    ///   for a status code outside 200 to 299,
+    ///   as ``DecisionError/requestFailed(statusCode:detail:headers:)`` describes,
     ///   ``DecisionError/invalidResponse(_:)`` for a non-HTTP response,
-    ///   a ``DecisionError`` with the code ``DecisionError/Code/timedOut``
-    ///   or ``DecisionError/Code/transportFailed`` for a `URLError`,
-    ///   or `CancellationError` if the task is cancelled.
+    ///   or `URLError` if the request fails on the way or is cancelled.
     func send(
         _ method: HTTP.Method,
         url: URL,
@@ -147,22 +159,13 @@ extension URLSession {
             request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            #if canImport(FoundationNetworking)
-                (data, response) = try await withLinuxRequestLock {
-                    try await self.data(for: request)
-                }
-            #else
-                (data, response) = try await self.data(for: request)
-            #endif
-        } catch let error as URLError {
-            if error.code == .cancelled {
-                throw CancellationError()
+        #if canImport(FoundationNetworking)
+            let (data, response) = try await withLinuxRequestLock {
+                try await self.data(for: request)
             }
-            throw DecisionError(error)
-        }
+        #else
+            let (data, response) = try await self.data(for: request)
+        #endif
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DecisionError.invalidResponse("The response is not an HTTP response.")
@@ -170,29 +173,17 @@ extension URLSession {
 
         guard (200 ..< 300).contains(httpResponse.statusCode) else {
             // A server can echo a credential, for example in an "invalid API key" message.
-            let detail = HTTP.redactingCredentials(
-                in: String(data: data, encoding: .utf8) ?? "Invalid response",
-                requestHeaders: headers
-            )
-            throw DecisionError.requestFailed(
-                statusCode: httpResponse.statusCode,
-                detail: detail,
-                headers: httpResponse.stringHeaders
-            )
+            let body = HTTP.redactingCredentials(in: data, requestHeaders: headers)
+            guard let response = httpResponse.httpResponse else {
+                throw DecisionError.requestFailed(
+                    statusCode: httpResponse.statusCode,
+                    detail: String(data: body, encoding: .utf8) ?? "Invalid response",
+                    headers: [:]
+                )
+            }
+            throw DecisionError(response: response, body: body)
         }
 
         return (data, httpResponse)
-    }
-}
-
-extension HTTPURLResponse {
-    /// The response headers with lowercase names.
-    var stringHeaders: [String: String] {
-        var headers: [String: String] = [:]
-        for (key, value) in allHeaderFields {
-            guard let key = key as? String else { continue }
-            headers[key.lowercased()] = value as? String ?? String(describing: value)
-        }
-        return headers
     }
 }

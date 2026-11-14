@@ -100,6 +100,8 @@ public final class DecisionSession: Sendable {
     /// - Throws: ``DecisionError`` if a question is invalid, the batch exceeds a limit,
     ///   or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
+    ///   A remote backend throws the URL session's `URLError`
+    ///   for a request that fails on the way or is cancelled while it is sent.
     ///   A backend can also throw its own error for an option that it rejects.
     public func decide(_ questions: [Question]) async throws -> Response {
         try await decide(questions, options: options)
@@ -118,6 +120,8 @@ public final class DecisionSession: Sendable {
     /// - Throws: ``DecisionError`` if a question is invalid, the batch exceeds a limit,
     ///   or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
+    ///   A remote backend throws the URL session's `URLError`
+    ///   for a request that fails on the way or is cancelled while it is sent.
     ///   A backend can also throw its own error for an option that it rejects.
     @_disfavoredOverload
     public func decide(_ questions: [Question], options: DecisionOptions) async throws -> Response {
@@ -138,6 +142,8 @@ public final class DecisionSession: Sendable {
     /// - Returns: The answer.
     /// - Throws: ``DecisionError`` if the question is invalid or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
+    ///   A remote backend throws the URL session's `URLError`
+    ///   for a request that fails on the way or is cancelled while it is sent.
     public func decide(_ question: Question) async throws -> Answer {
         try await decide(question, options: options)
     }
@@ -151,6 +157,8 @@ public final class DecisionSession: Sendable {
     /// - Returns: The answer.
     /// - Throws: ``DecisionError`` if the question is invalid or the backend fails,
     ///   or `CancellationError` if the task is cancelled.
+    ///   A remote backend throws the URL session's `URLError`
+    ///   for a request that fails on the way or is cancelled while it is sent.
     @_disfavoredOverload
     public func decide(_ question: Question, options: DecisionOptions) async throws -> Answer {
         try await decide([question], options: options).answers[0]

@@ -224,8 +224,8 @@ struct UnsupportedAttachmentTests {
         )
         let session = DecisionSession(model: model, state: state)
 
-        await #expect(
-            throws: DecisionError.unsupportedState("OllamaDecisionModel does not support image attachments.")
+        await expectDecisionError(
+            DecisionError.unsupportedState("OllamaDecisionModel does not support image attachments.")
         ) {
             _ = try await session.probability(of: "Is this urgent?")
         }
@@ -249,7 +249,7 @@ struct UnsupportedAttachmentTests {
                 DecisionRequest(state: state, questions: [.binary(instructions: "Is this urgent?")])
             )
             Issue.record("Expected an error.")
-        } catch let error as DecisionError where error.code == .unsupportedState {
+        } catch let error as DecisionError where error.kind == .unsupportedState {
         }
         #expect(host.recorded.isEmpty)
     }

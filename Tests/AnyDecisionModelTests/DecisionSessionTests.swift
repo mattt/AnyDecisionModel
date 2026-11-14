@@ -151,8 +151,8 @@ struct DecisionSessionTests {
     @Test func rejectsQuestionsBeyondCapabilities() async throws {
         let session = DecisionSession(model: model, state: "ticket")
         let options = ["a", "b", "c", "d"].map { ChoiceOption($0) }
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1,
                 reason: "The model supports at most 3 choice options, not 4."
             )
@@ -210,7 +210,7 @@ struct ResponseValidationTests {
     @Test func rejectsMissingAnswer() {
         var answers = validAnswers
         answers.removeLast()
-        #expect(throws: DecisionError.invalidResponse("Expected 3 answers, got 2.")) {
+        expectDecisionError(DecisionError.invalidResponse("Expected 3 answers, got 2.")) {
             try response(answers).validate(against: questions)
         }
     }
@@ -220,7 +220,7 @@ struct ResponseValidationTests {
         response.diagnostics = [
             DecisionSession.Diagnostics(allowedAnswerMass: 1, cachedTokenCount: 0, evaluatedTokenCount: 1)
         ]
-        #expect(throws: DecisionError.invalidResponse("Expected 3 diagnostics, got 1.")) {
+        expectDecisionError(DecisionError.invalidResponse("Expected 3 diagnostics, got 1.")) {
             try response.validate(against: questions)
         }
     }
@@ -228,7 +228,19 @@ struct ResponseValidationTests {
     @Test func rejectsWrongAnswerType() {
         var answers = validAnswers
         answers[0] = answers[2]
-        #expect(throws: DecisionError.invalidResponse("Question at index 0: Expected a binary answer.")) {
+        expectDecisionError(
+            DecisionError.invalidResponse("Question at index 0: Expected a binary answer.", questionIndex: 0)
+        ) {
+            try response(answers).validate(against: questions)
+        }
+    }
+
+    @Test func reportsTheIndexOfALaterQuestion() {
+        var answers = validAnswers
+        answers[2] = answers[0]
+        expectDecisionError(
+            DecisionError.invalidResponse("Question at index 2: Expected a score answer.", questionIndex: 2)
+        ) {
             try response(answers).validate(against: questions)
         }
     }

@@ -7,7 +7,8 @@ import Foundation
 /// has a status code in ``retryableStatusCodes``.
 /// The status code decides,
 /// whatever the error's ``DecisionError/isRetryable`` value,
-/// and an error without a response, such as a timeout, is not retried.
+/// and an error without a response is not retried.
+/// A `URLError`, such as a timeout in the URL session, is not retried either.
 /// The error's ``DecisionError/retryAfter`` value replaces the generated delay,
 /// and either delay is limited by ``maximumInterval``.
 public struct RetryPolicy: Hashable, Sendable, Sequence {
@@ -165,9 +166,9 @@ public struct RetryPolicy: Hashable, Sendable, Sequence {
     /// in ``retryableStatusCodes``,
     /// whatever its ``DecisionError/isRetryable`` value.
     /// It does not retry an error without a status code,
-    /// such as a timeout in the URL session.
+    /// such as a response that can't be decoded.
     func shouldRetry(_ error: DecisionError) -> Bool {
-        guard let statusCode = error.response?.statusCode else { return false }
+        guard let statusCode = error.response?.status.code else { return false }
         return retryableStatusCodes.contains(statusCode)
     }
 

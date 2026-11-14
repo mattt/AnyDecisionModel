@@ -298,9 +298,10 @@ struct ProbabilityTotalTests {
     }
 
     @Test func rejectsValueAboveOne() {
-        #expect(
-            throws: DecisionError.invalidResponse(
-                "Question at index 0: The probability of level 0 1.05 is not a probability."
+        expectDecisionError(
+            DecisionError.invalidResponse(
+                "Question at index 0: The probability of level 0 1.05 is not a probability.",
+                questionIndex: 0
             )
         ) {
             try DistributionKind.score.validate([1.05, -0.05])
@@ -308,9 +309,10 @@ struct ProbabilityTotalTests {
     }
 
     @Test func rejectsNegativeValue() {
-        #expect(
-            throws: DecisionError.invalidResponse(
-                "Question at index 0: The probability of level 2 -0.05 is not a probability."
+        expectDecisionError(
+            DecisionError.invalidResponse(
+                "Question at index 0: The probability of level 2 -0.05 is not a probability.",
+                questionIndex: 0
             )
         ) {
             try DistributionKind.score.validate([0.5, 0.55, -0.05])
@@ -318,7 +320,9 @@ struct ProbabilityTotalTests {
     }
 
     @Test func rejectsTotalFarFromOne() {
-        #expect(throws: DecisionError.invalidResponse("Question at index 0: The probabilities sum to 0.0, not 1.")) {
+        expectDecisionError(
+            DecisionError.invalidResponse("Question at index 0: The probabilities sum to 0.0, not 1.", questionIndex: 0)
+        ) {
             try DistributionKind.score.validate([0, 0, 0])
         }
     }
@@ -337,9 +341,10 @@ struct ProbabilityTotalTests {
             confidence: 0.5
         )
         for answer in [missing, extra, renamed] {
-            #expect(
-                throws: DecisionError.invalidResponse(
-                    "Question at index 0: The probabilities do not match the options."
+            expectDecisionError(
+                DecisionError.invalidResponse(
+                    "Question at index 0: The probabilities do not match the options.",
+                    questionIndex: 0
                 )
             ) {
                 try DecisionSession.Response(modelID: "m", answers: [answer]).validate(against: [question])

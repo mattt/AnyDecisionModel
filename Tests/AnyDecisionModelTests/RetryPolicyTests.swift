@@ -277,9 +277,9 @@ struct RetryPolicyTests {
 
     @Test(
         arguments: [
-            DecisionError(URLError(.timedOut)),
-            DecisionError(URLError(.networkConnectionLost)),
-            DecisionError(code: .rateLimited, message: "Slow down."),
+            DecisionError(kind: .rateLimited, message: "Slow down."),
+            DecisionError(kind: .timedOut),
+            DecisionError.decodingFailed(URLError(.cannotDecodeContentData)),
             DecisionError.invalidResponse("Not JSON."),
         ]
     )

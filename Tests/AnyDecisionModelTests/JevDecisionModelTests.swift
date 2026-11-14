@@ -263,9 +263,10 @@ struct JevDecisionModelTests {
         do {
             _ = try await session.decide(.binary(instructions: "x"))
             Issue.record("Expected an error.")
-        } catch let error as DecisionError where error.code == .invalidResponse {
+        } catch let error as DecisionError where error.kind == .decodingError {
             // The response fails to decode, before it is checked against the question.
             #expect(!error.message.hasPrefix("Invalid response: Question"))
+            #expect(error.underlyingError is DecodingError)
         }
     }
 
@@ -281,10 +282,10 @@ struct JevDecisionModelTests {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
         } catch let error as DecisionError {
-            #expect(error.code == (statusCode == 401 ? .authenticationFailed : .requestFailed))
-            #expect(error.response?.statusCode == statusCode)
-            #expect(error.response?.body.contains("nope") == true)
-            #expect(error.response?.headers["x-request-id"] == "abc")
+            #expect(error.kind == (statusCode == 401 ? .authenticationFailed : .httpError))
+            #expect(error.response?.status.code == statusCode)
+            #expect(error.bodyText?.contains("nope") == true)
+            #expect(error.header("x-request-id") == "abc")
         }
         #expect(host.recorded.count == 1)
     }
@@ -324,13 +325,13 @@ struct JevDecisionModelTests {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
         } catch let error as DecisionError {
-            #expect(error.code == .requestFailed)
+            #expect(error.kind == .httpError)
             #expect(error.isRetryable)
             #expect(error.retryAfter == .seconds(1))
-            #expect(error.response?.statusCode == 529)
-            #expect(error.response?.body == #"{"error": "final"}"#)
-            #expect(error.response?.headers["retry-after"] == "1")
-            #expect(error.response?.headers["x-attempt"] == "final")
+            #expect(error.response?.status.code == 529)
+            #expect(error.bodyText == #"{"error": "final"}"#)
+            #expect(error.header("retry-after") == "1")
+            #expect(error.header("x-attempt") == "final")
         }
         #expect(host.recorded.count == 3)
     }
@@ -365,7 +366,7 @@ struct JevDecisionModelTests {
                 #expect(probability == 0.75)
             } catch let error as DecisionError {
                 #expect(!retried, "status \(statusCode)")
-                #expect(error.response?.statusCode == statusCode)
+                #expect(error.response?.status.code == statusCode)
             }
             #expect(host.recorded.count == (retried ? 2 : 1), "status \(statusCode)")
         }
@@ -387,44 +388,27 @@ struct JevDecisionModelTests {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
         } catch let error as DecisionError {
-            #expect(error.code == .timedOut)
+            #expect(error.kind == .timedOut)
             #expect(error.isRetryable)
         }
         #expect(host.recorded.count == 1)
     }
 
-    @Test(
-        arguments: [
-            (URLError.Code.timedOut, DecisionError.Code.timedOut),
-            (.networkConnectionLost, .transportFailed),
-            (.cannotFindHost, .transportFailed),
-        ]
-    )
-    func mapsURLErrorsWithoutRetry(failure: URLError.Code, code: DecisionError.Code) async throws {
+    /// A request that fails on the way throws the URL session's own error,
+    /// and it is not retried, as in version 0.9.
+    @Test(arguments: [URLError.Code.timedOut, .networkConnectionLost, .cannotFindHost, .cancelled])
+    func urlErrorsPassThroughWithoutRetry(failure: URLError.Code) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(failure: failure)
         host.enqueue(json: okResponse)
         let session = DecisionSession(model: makeModel(host), state: "state")
 
-        do {
+        await #expect {
             _ = try await session.probability(of: "Question?")
-            Issue.record("Expected an error.")
-        } catch let error as DecisionError {
-            #expect(error.code == code)
-            #expect(error.isRetryable)
-            #expect(error.response == nil)
+        } throws: { error in
+            (error as? URLError)?.code == failure
         }
         #expect(host.recorded.count == 1)
-    }
-
-    @Test func cancelledURLErrorIsCancellationError() async throws {
-        let host = StubURLProtocol.Host()
-        host.enqueue(failure: .cancelled)
-        let session = DecisionSession(model: makeModel(host), state: "state")
-
-        await #expect(throws: CancellationError.self) {
-            _ = try await session.probability(of: "Question?")
-        }
     }
 
     @Test func eachRequestUsesIndependentRetrier() async throws {
@@ -529,7 +513,7 @@ struct JevDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch let error as DecisionError where error.code == .invalidResponse {
+        } catch let error as DecisionError where error.kind == .decodingError {
         }
     }
 
@@ -537,7 +521,9 @@ struct JevDecisionModelTests {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"model": "jev", "answers": {"other": {"noul": 0.5}}}"#)
         let session = DecisionSession(model: makeModel(host), state: "state")
-        await #expect(throws: DecisionError.invalidResponse("No answer for the question at index 0.")) {
+        await expectDecisionError(
+            DecisionError.invalidResponse("No answer for the question at index 0.", questionIndex: 0)
+        ) {
             _ = try await session.probability(of: "Question?")
         }
     }
@@ -545,7 +531,7 @@ struct JevDecisionModelTests {
     @Test func missingCredentialsFailBeforeRequest() async throws {
         let host = StubURLProtocol.Host()
         let session = DecisionSession(model: makeModel(host, apiKey: nil), state: "state")
-        await #expect(throws: DecisionError.missingCredentials) {
+        await expectDecisionError(DecisionError.missingCredentials) {
             _ = try await session.probability(of: "Question?")
         }
         #expect(host.recorded.isEmpty)
@@ -561,8 +547,11 @@ struct JevDecisionModelTests {
         // so the request is still in flight when the test cancels it.
         try await host.waitForRequests()
         task.cancel()
-        await #expect(throws: CancellationError.self) {
+        // The URL session reports a request that is cancelled in flight with its own error.
+        await #expect {
             _ = try await task.value
+        } throws: { error in
+            (error as? URLError)?.code == .cancelled
         }
     }
 
@@ -585,8 +574,12 @@ struct JevDecisionModelTests {
         // cancellation stops it there, and the test still passes.
         try await Task.sleep(for: .milliseconds(100))
         task.cancel()
-        await #expect(throws: CancellationError.self) {
+        await #expect {
             _ = try await task.value
+        } throws: { error in
+            // A cancelled backoff throws `CancellationError`;
+            // a request still in flight throws the URL session's `URLError`.
+            error is CancellationError || (error as? URLError)?.code == .cancelled
         }
         #expect(host.recorded.count == 1)
     }

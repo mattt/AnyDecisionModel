@@ -355,9 +355,12 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
                 extraBody: extraBody
             )
             let response = try await model.send(body, headers: headers)
-            let answers = try keys.map { key in
+            let answers = try zip(questions.indices, keys).map { index, key in
                 guard let answer = response.answers[key] else {
-                    throw DecisionError.invalidResponse("No answer for the question at index \(key).")
+                    throw DecisionError.invalidResponse(
+                        "No answer for the question at index \(index).",
+                        questionIndex: index
+                    )
                 }
                 return answer.answer
             }
@@ -401,7 +404,15 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         // Key order has no meaning in JSON, so servers read the same request.
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let body = try encoder.encode(request)
+        let body: Data
+        do {
+            body = try encoder.encode(request)
+        } catch let error as DecisionError {
+            // The encoder rejects a state that the model can't read.
+            throw error
+        } catch {
+            throw DecisionError.encodingFailed(error)
+        }
 
         if !requiresAPIKey {
             apiKey = readAPIKey()
@@ -422,7 +433,7 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
                 do {
                     return try JSONDecoder().decode(SystemOneResponse.self, from: data)
                 } catch {
-                    throw DecisionError.invalidResponse(String(describing: error))
+                    throw DecisionError.decodingFailed(error)
                 }
             } catch let error as DecisionError {
                 guard retryPolicy.shouldRetry(error), let generatedDelay = retrier.next() else {
@@ -594,7 +605,7 @@ extension SystemOneDecisionModel {
     /// ``SystemOneDecisionModel/headers`` with the same name in any letter case.
     /// The model's other defaults stay.
     /// A request whose options set a reserved key
-    /// throws a ``DecisionError`` with the code ``DecisionError/Code/unsupportedOption``
+    /// throws a ``DecisionError`` with the kind ``DecisionError/Kind/unsupportedOption``
     /// before it is sent.
     ///
     /// Options that belong to one server configuration,
@@ -625,7 +636,7 @@ extension SystemOneDecisionModel {
 
         /// Adds these options to a model's default body fields and headers.
         ///
-        /// - Throws: ``DecisionError`` with the code ``DecisionError/Code/unsupportedOption``
+        /// - Throws: ``DecisionError`` with the kind ``DecisionError/Kind/unsupportedOption``
         ///   if ``extraBody`` sets a reserved field
         ///   or ``extraHeaders`` sets a reserved header.
         func apply(to body: inout [String: JSONValue], headers: inout [String: String]) throws {
@@ -662,7 +673,7 @@ extension SystemOneDecisionModel {
     /// ``SystemOneDecisionModel/init(baseURL:path:modelID:apiKey:headers:capabilities:extraBody:session:retryPolicy:)``
     /// throws this error before it creates the model.
     /// A request whose ``SystemOneDecisionModel/CustomOptions`` set a reserved key
-    /// throws a ``DecisionError`` with the code ``DecisionError/Code/unsupportedOption``
+    /// throws a ``DecisionError`` with the kind ``DecisionError/Kind/unsupportedOption``
     /// before it is sent.
     public struct ConfigurationError: Error, Hashable, Sendable, LocalizedError, CustomStringConvertible {
         /// A kind of configuration error.

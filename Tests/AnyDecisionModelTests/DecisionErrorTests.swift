@@ -1,4 +1,5 @@
 import Foundation
+import HTTPTypes
 import Testing
 
 @testable import AnyDecisionModel
@@ -13,44 +14,46 @@ struct DecisionErrorTests {
 
     @Test(
         arguments: [
-            (401, DecisionError.Code.authenticationFailed),
+            (401, DecisionError.Kind.authenticationFailed),
             (403, .authenticationFailed),
             (402, .quotaExceeded),
             (408, .timedOut),
             (504, .timedOut),
             (429, .rateLimited),
-            (300, .requestFailed),
-            (400, .requestFailed),
-            (404, .requestFailed),
-            (409, .requestFailed),
-            (422, .requestFailed),
-            (500, .requestFailed),
-            (502, .requestFailed),
-            (503, .requestFailed),
-            (529, .requestFailed),
+            (300, .httpError),
+            (400, .httpError),
+            (404, .httpError),
+            (409, .httpError),
+            (422, .httpError),
+            (500, .httpError),
+            (502, .httpError),
+            (503, .httpError),
+            (529, .httpError),
         ]
     )
-    func mapsStatusCode(statusCode: Int, code: DecisionError.Code) {
+    func mapsStatusCode(statusCode: Int, kind: DecisionError.Kind) {
         let error = DecisionError.requestFailed(
             statusCode: statusCode,
             detail: #"{"error": "nope"}"#,
             headers: ["X-Request-Id": "abc"]
         )
 
-        #expect(error.code == code)
+        #expect(error.kind == kind)
         #expect(error.message == #"HTTP error (status \#(statusCode)): {"error": "nope"}"#)
-        #expect(error.response?.statusCode == statusCode)
-        #expect(error.response?.body == #"{"error": "nope"}"#)
-        #expect(error.response?.headers == ["x-request-id": "abc"])
+        #expect(error.response?.status.code == statusCode)
+        #expect(error.bodyText == #"{"error": "nope"}"#)
+        #expect(error.header("x-request-id") == "abc")
         #expect(error.questionIndex == nil)
         #expect(error.reason == nil)
+        #expect(error.underlyingError == nil)
         #expect(error.retryAfter == nil)
     }
 
     @Test func everyStatusCodeKeepsTheResponse() {
         for statusCode in 100 ..< 600 {
             let error = DecisionError.requestFailed(statusCode: statusCode, detail: "body", headers: [:])
-            #expect(error.response == DecisionError.HTTPResponse(statusCode: statusCode, body: "body"))
+            #expect(error.response?.status.code == statusCode)
+            #expect(error.body == Data("body".utf8))
             #expect(error.message == "HTTP error (status \(statusCode)): body")
         }
     }
@@ -58,25 +61,26 @@ struct DecisionErrorTests {
     // MARK: - Retry-After
 
     @Test func rateLimitReadsRetryAfterSeconds() {
-        let error = DecisionError.requestFailed(statusCode: 429, detail: "", headers: ["Retry-After": " 7 "])
-        #expect(error.code == .rateLimited)
+        let error = DecisionError.requestFailed(statusCode: 429, detail: "", headers: ["Retry-After": "7"])
+        #expect(error.kind == .rateLimited)
         #expect(error.retryAfter == .seconds(7))
-        #expect(error.response?.headers["retry-after"] == " 7 ")
+        #expect(error.header("retry-after") == "7")
     }
 
     @Test func retryAfterReadsFractionalSeconds() {
-        #expect(DecisionError.retryAfter(from: "1.5", now: Date()) == .milliseconds(1_500))
+        #expect(DecisionError.retryAfter(from: " 1.5 ", now: Date()) == .milliseconds(1_500))
     }
 
     @Test func retryAfterReadsHTTPDate() {
         let now = Date(timeIntervalSince1970: 1_445_412_480)
-        let error = DecisionError(
+        let error = DecisionError.requestFailed(
             statusCode: 429,
             detail: "",
-            headers: ["retry-after": "Wed, 21 Oct 2015 07:28:05 GMT"],
-            now: now
+            headers: ["Retry-After": "Wed, 21 Oct 2015 07:28:05 GMT"]
         )
-        #expect(error.retryAfter == .seconds(5))
+        #expect(error.retryAfter(now: now) == .seconds(5))
+        // A date that has passed asks for no wait.
+        #expect(error.retryAfter == .zero)
     }
 
     @Test func retryAfterInThePastIsZero() {
@@ -97,12 +101,16 @@ struct DecisionErrorTests {
         #expect(retryAfter == .seconds(DecisionError.maximumRetryAfterSeconds))
     }
 
-    /// A `Retry-After` header on a status other than 429, such as 503, is kept,
-    /// because the retry policy reads it for every retryable status code.
+    /// A `Retry-After` header on a status other than 429, such as 503, is read,
+    /// because the retry policy honors it for every retryable status code.
     @Test func otherStatusCodesReadRetryAfter() {
         let error = DecisionError.requestFailed(statusCode: 503, detail: "", headers: ["Retry-After": "2"])
-        #expect(error.code == .requestFailed)
+        #expect(error.kind == .httpError)
         #expect(error.retryAfter == .seconds(2))
+    }
+
+    @Test func errorWithoutResponseHasNoRetryAfter() {
+        #expect(DecisionError(kind: .rateLimited).retryAfter == nil)
     }
 
     // MARK: - isRetryable
@@ -113,61 +121,68 @@ struct DecisionErrorTests {
             let expected = [408, 429, 503, 504, 529].contains(statusCode)
             #expect(error.isRetryable == expected, "status \(statusCode)")
         }
-        #expect(DecisionError(URLError(.timedOut)).isRetryable)
-        #expect(DecisionError(URLError(.networkConnectionLost)).isRetryable)
-        #expect(!DecisionError(URLError(.badURL)).isRetryable)
-        #expect(!DecisionError(URLError(.unsupportedURL)).isRetryable)
+        #expect(DecisionError(kind: .rateLimited).isRetryable)
+        #expect(DecisionError(kind: .timedOut).isRetryable)
+        #expect(!DecisionError(kind: .httpError).isRetryable)
         #expect(!DecisionError.missingCredentials.isRetryable)
         #expect(!DecisionError.invalidResponse("x").isRetryable)
         #expect(!DecisionError.inputBlocked(reason: "safety", message: nil).isRetryable)
     }
 
-    @Test func initializerDefaultsIsRetryableByCode() {
-        #expect(DecisionError(code: .rateLimited, message: "").isRetryable)
-        #expect(DecisionError(code: .timedOut, message: "").isRetryable)
-        #expect(DecisionError(code: .transportFailed, message: "").isRetryable)
-        #expect(!DecisionError(code: .requestFailed, message: "").isRetryable)
-        #expect(
-            DecisionError(
-                code: .requestFailed,
-                message: "",
-                response: DecisionError.HTTPResponse(statusCode: 503)
-            ).isRetryable
-        )
-        #expect(!DecisionError(code: .rateLimited, message: "", isRetryable: false).isRetryable)
-        #expect(DecisionError(code: .invalidResponse, message: "", isRetryable: true).isRetryable)
-    }
+    // MARK: - Kinds
 
-    // MARK: - URL errors
-
-    @Test func mapsURLErrors() {
-        let timeout = DecisionError(URLError(.timedOut))
-        #expect(timeout.code == .timedOut)
-        #expect(timeout.message == "The request timed out.")
-        #expect(timeout.response == nil)
-
-        let lost = DecisionError(URLError(.networkConnectionLost))
-        #expect(lost.code == .transportFailed)
-        #expect(lost.message.hasPrefix("Transport error (URLError \(URLError.Code.networkConnectionLost.rawValue)): "))
-        #expect(lost.response == nil)
+    @Test func kindDescriptions() {
+        let kinds: [(DecisionError.Kind, String)] = [
+            (.invalidRequest, "Invalid request"),
+            (.invalidResponse, "Invalid response"),
+            (.httpError, "HTTP error"),
+            (.providerError, "Provider error"),
+            (.decodingError, "Decoding error"),
+            (.authenticationFailed, "Authentication failed"),
+            (.quotaExceeded, "Quota exceeded"),
+            (.timedOut, "Timed out"),
+            (.rateLimited, "Rate limited"),
+            (.guardrailViolation, "Guardrail violation"),
+            (.refusal, "Refusal"),
+            (.modelUnavailable, "Model unavailable"),
+            (.missingCredentials, "Missing credentials"),
+            (.invalidQuestion, "Invalid question"),
+            (.unsupportedQuestion, "Unsupported question"),
+            (.unsupportedState, "Unsupported state"),
+            (.unsupportedOption, "Unsupported option"),
+        ]
+        for (kind, description) in kinds {
+            #expect(kind.description == description)
+        }
+        #expect(Set(kinds.map(\.0)).count == kinds.count)
     }
 
     // MARK: - Messages and descriptions
 
     @Test func versionZeroNineMessages() {
-        let cases: [(DecisionError, String)] = [
-            (.invalidQuestion(index: 2, reason: "Empty."), "Invalid question at index 2: Empty."),
-            (.unsupportedQuestion(index: 1, reason: "Too many."), "Unsupported question at index 1: Too many."),
-            (.unsupportedState("No images."), "Unsupported state: No images."),
-            (.missingCredentials, "No API key is configured."),
-            (.requestFailed(statusCode: 500, detail: "boom", headers: [:]), "HTTP error (status 500): boom"),
-            (.inputBlocked(reason: "safety", message: "Blocked."), "The input was blocked (safety): Blocked."),
-            (.inputBlocked(reason: "safety", message: nil), "The input was blocked (safety)."),
-            (.inputBlocked(reason: "safety", message: ""), "The input was blocked (safety)."),
-            (.invalidResponse("Not JSON."), "Invalid response: Not JSON."),
-            (.modelUnavailable("Missing."), "Model unavailable: Missing."),
+        let cases: [(DecisionError, DecisionError.Kind, String)] = [
+            (.invalidQuestion(index: 2, reason: "Empty."), .invalidQuestion, "Invalid question at index 2: Empty."),
+            (
+                .unsupportedQuestion(index: 1, reason: "Too many."), .unsupportedQuestion,
+                "Unsupported question at index 1: Too many."
+            ),
+            (.unsupportedState("No images."), .unsupportedState, "Unsupported state: No images."),
+            (.missingCredentials, .missingCredentials, "No API key is configured."),
+            (
+                .requestFailed(statusCode: 500, detail: "boom", headers: [:]), .httpError,
+                "HTTP error (status 500): boom"
+            ),
+            (
+                .inputBlocked(reason: "safety", message: "Blocked."), .guardrailViolation,
+                "The input was blocked (safety): Blocked."
+            ),
+            (.inputBlocked(reason: "safety", message: nil), .guardrailViolation, "The input was blocked (safety)."),
+            (.inputBlocked(reason: "safety", message: ""), .guardrailViolation, "The input was blocked (safety)."),
+            (.invalidResponse("Not JSON."), .invalidResponse, "Invalid response: Not JSON."),
+            (.modelUnavailable("Missing."), .modelUnavailable, "Model unavailable: Missing."),
         ]
-        for (error, message) in cases {
+        for (error, kind, message) in cases {
+            #expect(error.kind == kind)
             #expect(error.message == message)
             #expect(error.description == message)
             #expect(error.errorDescription == message)
@@ -176,67 +191,55 @@ struct DecisionErrorTests {
         }
     }
 
+    @Test func defaultMessageFollowsAnyLanguageModel() {
+        let underlying = URLError(.cannotDecodeContentData)
+        #expect(DecisionError(kind: .providerError).message == "Provider error")
+        #expect(
+            DecisionError(
+                kind: .httpError,
+                response: HTTPResponse(status: .badGateway),
+                body: Data("upstream".utf8)
+            ).message == "HTTP error (Status 502): upstream"
+        )
+        #expect(
+            DecisionError(kind: .decodingError, underlyingError: underlying).message
+                == "Decoding error: \(underlying as any Error)"
+        )
+    }
+
     @Test func factoriesSetFields() {
         let invalid = DecisionError.invalidQuestion(index: 3, reason: "Empty.")
-        #expect(invalid.code == .invalidQuestion)
+        #expect(invalid.kind == .invalidQuestion)
         #expect(invalid.questionIndex == 3)
 
         let unsupported = DecisionError.unsupportedQuestion(index: 4, reason: "Too many.")
-        #expect(unsupported.code == .unsupportedQuestion)
+        #expect(unsupported.kind == .unsupportedQuestion)
         #expect(unsupported.questionIndex == 4)
 
         let blocked = DecisionError.inputBlocked(reason: "safety", message: "Blocked.")
-        #expect(blocked.code == .inputBlocked)
+        #expect(blocked.kind == .guardrailViolation)
         #expect(blocked.reason == "safety")
-        #expect(blocked.response == nil)
 
-        let refused = DecisionError.refused(reason: "content_filter", message: "No.")
-        #expect(refused.code == .refused)
-        #expect(refused.reason == "content_filter")
-        #expect(refused.message == "The model refused to answer: No.")
+        let refusal = DecisionError.refusal(reason: "content_filter", message: "No.")
+        #expect(refusal.kind == .refusal)
+        #expect(refusal.reason == "content_filter")
+        #expect(refusal.message == "The model refused to answer: No.")
 
         let option = DecisionError.unsupportedOption("No seed.")
-        #expect(option.code == .unsupportedOption)
+        #expect(option.kind == .unsupportedOption)
         #expect(option.message == "Unsupported option: No seed.")
     }
 
-    // MARK: - Codable
+    @Test func codingFailuresKeepTheUnderlyingError() {
+        let underlying = URLError(.cannotDecodeContentData)
+        let decoding = DecisionError.decodingFailed(underlying)
+        #expect(decoding.kind == .decodingError)
+        #expect(decoding.message == "Invalid response: \(underlying as any Error)")
+        #expect((decoding.underlyingError as? URLError)?.code == .cannotDecodeContentData)
 
-    @Test(
-        arguments: [
-            DecisionError.missingCredentials,
-            .invalidQuestion(index: 1, reason: "Empty."),
-            .inputBlocked(reason: "safety", message: nil),
-            .requestFailed(statusCode: 429, detail: "slow", headers: ["Retry-After": "3", "X-Id": "a"]),
-            DecisionError(URLError(.timedOut)),
-            DecisionError(
-                code: .refused,
-                message: "No.",
-                questionIndex: 0,
-                reason: "policy",
-                isRetryable: true,
-                retryAfter: .milliseconds(1_250),
-                response: DecisionError.HTTPResponse(statusCode: 418, headers: ["a": "b"], body: "{}")
-            ),
-        ]
-    )
-    func codableRoundTrip(error: DecisionError) throws {
-        let data = try JSONEncoder().encode(error)
-        #expect(try JSONDecoder().decode(DecisionError.self, from: data) == error)
-    }
-
-    @Test func codeEncodesAsString() throws {
-        let data = try JSONEncoder().encode(DecisionError.missingCredentials)
-        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(object["code"] as? String == "missingCredentials")
-        #expect(object["message"] as? String == "No API key is configured.")
-        #expect(object["isRetryable"] as? Bool == false)
-    }
-
-    @Test func decodingRedactsCredentialHeaders() throws {
-        let json = #"{"statusCode": 401, "headers": {"Authorization": "Bearer sk-secret"}, "body": ""}"#
-        let response = try JSONDecoder().decode(DecisionError.HTTPResponse.self, from: Data(json.utf8))
-        #expect(response.headers == ["authorization": "<redacted>"])
+        let encoding = DecisionError.encodingFailed(underlying)
+        #expect(encoding.kind == .invalidRequest)
+        #expect((encoding.underlyingError as? URLError)?.code == .cannotDecodeContentData)
     }
 
     // MARK: - Credentials
@@ -253,29 +256,34 @@ struct DecisionErrorTests {
                 "X-Request-Id": "abc",
             ]
         )
-        #expect(
-            error.response?.headers == [
-                "authorization": "<redacted>",
-                "proxy-authorization": "<redacted>",
-                "x-api-key": "<redacted>",
-                "x-goog-api-key": "<redacted>",
-                "x-request-id": "abc",
-            ]
-        )
+        #expect(error.header("authorization") == "<redacted>")
+        #expect(error.header("proxy-authorization") == "<redacted>")
+        #expect(error.header("x-api-key") == "<redacted>")
+        #expect(error.header("x-goog-api-key") == "<redacted>")
+        #expect(error.header("x-request-id") == "abc")
         #expect(!String(reflecting: error).contains("sk-secret"))
     }
 
-    @Test func redactsCredentialsInText() {
+    @Test func initializerRedactsCredentialHeaders() {
+        var fields = HTTPFields()
+        fields[.authorization] = "Bearer sk-secret"
+        fields.append(HTTPField(name: .authorization, value: "Bearer sk-other"))
+        let error = DecisionError(kind: .httpError, response: HTTPResponse(status: .unauthorized, headerFields: fields))
+        #expect(error.response?.headerFields[fields: .authorization].map(\.value) == ["<redacted>", "<redacted>"])
+    }
+
+    @Test func redactsCredentialsInBody() {
         let headers = ["Authorization": "Bearer sk-secret", "Accept": "application/json"]
+        func redact(_ text: String, _ headers: [String: String]) -> String {
+            String(decoding: HTTP.redactingCredentials(in: Data(text.utf8), requestHeaders: headers), as: UTF8.self)
+        }
         #expect(
-            HTTP.redactingCredentials(in: "Bad key: sk-secret (Bearer sk-secret)", requestHeaders: headers)
-                == "Bad key: <redacted> (<redacted>)"
+            redact("Bad key: sk-secret (Bearer sk-secret) sk-secret", headers)
+                == "Bad key: <redacted> (<redacted>) <redacted>"
         )
-        #expect(HTTP.redactingCredentials(in: "application/json", requestHeaders: headers) == "application/json")
-        #expect(
-            HTTP.redactingCredentials(in: "key g-123", requestHeaders: ["x-goog-api-key": "g-123"])
-                == "key <redacted>"
-        )
+        #expect(redact("application/json", headers) == "application/json")
+        #expect(redact("key g-123", ["x-goog-api-key": "g-123"]) == "key <redacted>")
+        #expect(redact("", headers) == "")
     }
 
     @Test func systemOneErrorsDoNotContainTheAPIKey() async throws {
@@ -299,9 +307,9 @@ struct DecisionErrorTests {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
         } catch let error as DecisionError {
-            #expect(error.code == .authenticationFailed)
-            try expectNoSecret(apiKey, in: error)
-            #expect(error.response?.body == #"{"error": "Incorrect API key provided: <redacted>"}"#)
+            #expect(error.kind == .authenticationFailed)
+            expectNoSecret(apiKey, in: error)
+            #expect(error.bodyText == #"{"error": "Incorrect API key provided: <redacted>"}"#)
         }
         #expect(host.recorded.first?.headers["Authorization"] == "Bearer \(apiKey)")
     }
@@ -321,31 +329,63 @@ struct DecisionErrorTests {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
         } catch let error as DecisionError {
-            #expect(error.code == .requestFailed)
-            try expectNoSecret(apiKey, in: error)
+            #expect(error.kind == .httpError)
+            expectNoSecret(apiKey, in: error)
         }
     }
 
-    private func expectNoSecret(_ secret: String, in error: DecisionError) throws {
+    private func expectNoSecret(_ secret: String, in error: DecisionError) {
         #expect(!error.message.contains(secret))
         #expect(!error.description.contains(secret))
         #expect(!(error as any Error).localizedDescription.contains(secret))
         #expect(!String(reflecting: error).contains(secret))
-        #expect(error.response?.headers.values.contains { $0.contains(secret) } == false)
-        #expect(error.response?.body.contains(secret) == false)
-        let json = try JSONEncoder().encode(error)
-        #expect(String(decoding: json, as: UTF8.self).contains(secret) == false)
+        #expect(error.response?.headerFields.contains { $0.value.contains(secret) } == false)
+        #expect(error.bodyText?.contains(secret) == false)
+    }
+}
+
+// MARK: - Open kinds
+
+@Suite("DecisionKind and ProbabilitySource")
+struct OpenKindTests {
+    @Test func decisionKindNamesAndDescriptions() {
+        #expect([DecisionKind.binary, .choice, .score].map(\.rawValue) == ["binary", "choice", "score"])
+        #expect([DecisionKind.binary, .choice, .score].map(\.description) == ["binary", "choice", "score"])
+        #expect(DecisionKind(rawValue: "choice") == .choice)
+        #expect(DecisionKind(rawValue: "ranking")?.rawValue == "ranking")
+        #expect(DecisionKind(rawValue: "ranking") != .choice)
     }
 
-    // MARK: - Equality
+    @Test func probabilitySourceNamesAndDescriptions() {
+        typealias Source = DecisionCapabilities.ProbabilitySource
+        #expect([Source.native, .estimated, .unspecified].map(\.rawValue) == ["native", "estimated", "unspecified"])
+        #expect(Source.native.description == "native")
+        #expect(Source(rawValue: "estimated") == .estimated)
+        #expect(Source(rawValue: "guessed")?.rawValue == "guessed")
+        #expect(Source(rawValue: "guessed") != .estimated)
+    }
 
-    @Test func equalityComparesEveryField() {
-        #expect(DecisionError.missingCredentials == .missingCredentials)
-        #expect(DecisionError.invalidQuestion(index: 1, reason: "a") != .invalidQuestion(index: 2, reason: "a"))
-        #expect(DecisionError.invalidQuestion(index: 1, reason: "a") != .unsupportedQuestion(index: 1, reason: "a"))
-        var error = DecisionError.missingCredentials
-        error.isRetryable = true
-        #expect(error != .missingCredentials)
-        #expect(Set([DecisionError.missingCredentials, .missingCredentials]).count == 1)
+    @Test func encodeAsStrings() throws {
+        #expect(try JSONEncoder().encode([DecisionKind.binary]) == Data(#"["binary"]"#.utf8))
+        #expect(
+            try JSONEncoder().encode([DecisionCapabilities.ProbabilitySource.native]) == Data(#"["native"]"#.utf8)
+        )
+    }
+
+    @Test func roundTripKnownAndUnknownNames() throws {
+        let kinds = try JSONDecoder().decode([DecisionKind].self, from: Data(#"["score", "ranking"]"#.utf8))
+        #expect(kinds[0] == .score)
+        #expect(kinds[1].rawValue == "ranking")
+        #expect(try JSONEncoder().encode(kinds) == Data(#"["score","ranking"]"#.utf8))
+        // A decoded value, known or not, is created again from its raw value.
+        #expect(kinds.map { DecisionKind(rawValue: $0.rawValue) } == kinds)
+
+        let source = try JSONDecoder().decode(
+            DecisionCapabilities.ProbabilitySource.self,
+            from: Data(#""calibrated""#.utf8)
+        )
+        #expect(source.rawValue == "calibrated")
+        #expect(source != .native)
+        #expect(DecisionCapabilities.ProbabilitySource(rawValue: source.rawValue) == source)
     }
 }
