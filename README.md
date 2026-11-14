@@ -32,7 +32,7 @@ a probability for each option, and a confidence value.
 `anger` is a `Score` with the expected level,
 a probability for each level, and a confidence value.
 
-Seven backends are available:
+Eight backends are available:
 
 - [x] [MLX](#mlx) runs a small language model on Apple silicon
   and reads each decision from next-token probabilities in one forward pass.
@@ -45,13 +45,15 @@ Seven backends are available:
 - [x] [Ollama](#ollama) calls a System One model in
   [Ollama](https://docs.ollama.com/capabilities/decision),
   locally or in Ollama's cloud.
+- [x] [System One](#system-one) calls any server that implements the System One API,
+  with a configurable path, headers, limits, and request fields.
 - [x] [Gemini](#gemini) calls Google's
   [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api).
 
 ## Requirements
 
 - Swift 6.2+
-- macOS 26+ / iOS 26+ / Linux (core library, Jev, Ollama, and Gemini backends only)
+- macOS 26+ / iOS 26+ / Linux (core library, Jev, Ollama, System One, and Gemini backends only)
 - Ollama: Ollama v0.35.0 or later (v0.40.5 or later for cloud models)
 - MLX: Apple silicon and the Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`)
@@ -287,6 +289,7 @@ let model = JevDecisionModel(
 ```
 
 The API key must not be empty, even when the server ignores it.
+[`SystemOneDecisionModel`](#system-one) needs no placeholder key.
 
 ### Ollama
 
@@ -308,6 +311,40 @@ Pass `keepAlive:` to control how long the model stays loaded, in seconds.
 Ollama's probabilities and confidence values are returned unchanged.
 If the server rounds the probabilities,
 they can sum to slightly more or less than 1.
+
+### System One
+
+`SystemOneDecisionModel` works with servers that implement the System One API.
+Pass the server's URL and model name,
+and the path, API key, headers, limits, and extra request fields that the server needs:
+
+```swift
+let model = SystemOneDecisionModel(
+    baseURL: URL(string: "http://127.0.0.1:8000")!,
+    path: "v1/systemone",
+    modelID: "my-model",
+    apiKey: ProcessInfo.processInfo.environment["MY_API_KEY"],
+    headers: ["traceparent": traceparent],
+    capabilities: DecisionCapabilities(maximumQuestions: 64, maximumChoiceOptions: 26),
+    extraBody: ["cache_salt": "tenant-1"]
+)
+```
+
+The model sends the API key, if any, as a bearer token.
+The session checks each batch against `capabilities` before it sends a request.
+`extraBody` cannot set `model`, `state`, or `questions`,
+and `headers` cannot set `Authorization` or `Content-Type`;
+the initializer stops with a precondition failure if they do.
+The model retries like the Jev model; pass `retryPolicy: .never` to disable retries.
+It sends text and JSON states only.
+
+`SystemOneDecisionModel.jev(…)` and `SystemOneDecisionModel.ollama(…)`
+return models with the same configuration as `JevDecisionModel` and `OllamaDecisionModel`:
+
+```swift
+let jev = SystemOneDecisionModel.jev()
+let ollama = SystemOneDecisionModel.ollama(modelID: "nimble", keepAlive: 300)
+```
 
 ### Gemini
 
