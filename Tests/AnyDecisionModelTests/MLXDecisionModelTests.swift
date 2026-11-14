@@ -13,6 +13,13 @@ import Testing
 
     @Suite("MLXDecisionModel configuration")
     struct MLXDecisionModelConfigurationTests {
+        @Test func capabilitiesHaveTokenLabelLimits() {
+            let capabilities = MLXDecisionModel(modelID: defaultModelID).capabilities
+            #expect(capabilities.maximumChoiceOptions == 26)
+            #expect(capabilities.maximumScoreLevels == 10)
+            #expect(capabilities.probabilitySource == .native)
+        }
+
         @Test func prefixCachingIsDisabledByDefault() {
             #expect(MLXDecisionModel(modelID: defaultModelID).prefixCaching == false)
         }

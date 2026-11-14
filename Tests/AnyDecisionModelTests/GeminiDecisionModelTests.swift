@@ -384,6 +384,24 @@ struct GeminiDecisionModelTests {
         #expect(host.recorded.isEmpty)
     }
 
+    @Test func questionLimitIsACapability() async throws {
+        let host = StubURLProtocol.Host()
+        let model = makeModel(host)
+        let question = Question.binary(instructions: "x")
+        try model.capabilities.validate(Array(repeating: question, count: 1000), about: "state")
+
+        let session = DecisionSession(model: model, state: "state")
+        await #expect(
+            throws: DecisionError.unsupportedQuestion(
+                index: 1000,
+                reason: "GeminiDecisionModel accepts at most 1000 questions in one request, not 1001."
+            )
+        ) {
+            _ = try await session.decide(Array(repeating: question, count: 1001))
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
     @Test func rejectsChoiceWithOneOption() async throws {
         let host = StubURLProtocol.Host()
         let session = DecisionSession(model: makeModel(host), state: "state")

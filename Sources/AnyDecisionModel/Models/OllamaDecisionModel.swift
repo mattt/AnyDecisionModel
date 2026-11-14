@@ -88,7 +88,7 @@ public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     }
 
     public var capabilities: DecisionCapabilities {
-        DecisionCapabilities()
+        DecisionCapabilities(probabilitySource: .unspecified)
     }
 
     public var description: String {

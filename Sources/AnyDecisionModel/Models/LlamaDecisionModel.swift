@@ -192,7 +192,8 @@ import Foundation
         public var capabilities: DecisionCapabilities {
             DecisionCapabilities(
                 maximumChoiceOptions: TokenScoring.choiceLabels.count,
-                maximumScoreLevels: TokenScoring.scoreLabels.count
+                maximumScoreLevels: TokenScoring.scoreLabels.count,
+                probabilitySource: .native
             )
         }
 

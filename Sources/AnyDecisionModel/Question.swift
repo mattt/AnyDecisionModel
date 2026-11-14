@@ -17,6 +17,15 @@ public enum Question: Hashable, Sendable {
     /// Levels are ordered from lowest (index 0) to highest.
     case score(instructions: String, levels: [String])
 
+    /// The kind of the question.
+    public var kind: DecisionKind {
+        switch self {
+        case .binary: .binary
+        case .choice: .choice
+        case .score: .score
+        }
+    }
+
     /// The question instructions.
     var instructions: String {
         switch self {
@@ -63,6 +72,21 @@ public enum Question: Hashable, Sendable {
             }
         }
     }
+}
+
+/// The kind of a decision question.
+#if hasAttribute(nonexhaustive)
+    @nonexhaustive
+#endif
+public enum DecisionKind: String, Hashable, Sendable, Codable {
+    /// A yes-or-no question. See ``Question/binary(instructions:criteria:)``.
+    case binary
+
+    /// A question that selects one option from a set. See ``Question/choice(instructions:options:)``.
+    case choice
+
+    /// A question that places the state on an ordinal scale. See ``Question/score(instructions:levels:)``.
+    case score
 }
 
 /// Descriptions of what makes a binary question true or false.

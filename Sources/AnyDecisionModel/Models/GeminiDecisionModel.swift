@@ -89,9 +89,11 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
 
     public var capabilities: DecisionCapabilities {
         DecisionCapabilities(
+            maximumQuestions: Self.maximumQuestions,
             maximumChoiceOptions: Self.maximumCriteria,
             maximumScoreLevels: Self.maximumCriteria,
-            supportedAttachmentKinds: Set(DecisionState.Attachment.Kind.allCases)
+            supportedAttachmentKinds: Set(DecisionState.Attachment.Kind.allCases),
+            probabilitySource: .unspecified
         )
     }
 
@@ -252,18 +254,12 @@ public struct GeminiDecisionModel: DecisionModel, CustomStringConvertible {
 
     /// Checks a batch against the limits of the Gemini Decisions API.
     ///
-    /// The session already checks the largest number of options and levels
+    /// The session already checks the largest number of questions, options, and levels
     /// through ``capabilities``.
     ///
     /// - Throws: ``DecisionError/unsupportedQuestion(index:reason:)``
     ///   for the first question that the API would reject.
     static func check(_ questions: [Question]) throws {
-        if questions.count > maximumQuestions {
-            throw DecisionError.unsupportedQuestion(
-                index: maximumQuestions,
-                reason: "Gemini accepts at most \(maximumQuestions) questions in one request, not \(questions.count)."
-            )
-        }
         for (index, question) in questions.enumerated() {
             switch question {
             case .binary:
