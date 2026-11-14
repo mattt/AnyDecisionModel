@@ -103,7 +103,7 @@ dependencies: [
 ```
 
 Without traits, the package has no third-party dependencies
-and provides the core types and the Jev, Ollama, and Gemini backends.
+and provides the core types and the Jev, Ollama, System One, and Gemini backends.
 Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
 ```swift
