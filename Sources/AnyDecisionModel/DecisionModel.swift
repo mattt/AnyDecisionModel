@@ -106,6 +106,36 @@ public struct DecisionCapabilities: Hashable, Sendable {
         self.probabilitySource = probabilitySource
     }
 
+    /// Creates a capabilities description with the parameters of version 0.8.
+    ///
+    /// This initializer keeps references to it,
+    /// such as `DecisionCapabilities.init(maximumChoiceOptions:maximumScoreLevels:supportedAttachmentKinds:)`,
+    /// compiling.
+    /// Calls use the initializer with every parameter.
+    ///
+    /// - Parameters:
+    ///   - maximumChoiceOptions: The largest number of options in a choice question,
+    ///     or `nil` for no local limit.
+    ///   - maximumScoreLevels: The largest number of levels in a score question,
+    ///     or `nil` for no local limit.
+    ///   - supportedAttachmentKinds: The kinds of attachments that the model can read in a state.
+    @_disfavoredOverload
+    public init(
+        maximumChoiceOptions: Int?,
+        maximumScoreLevels: Int?,
+        supportedAttachmentKinds: Set<DecisionState.Attachment.Kind>
+    ) {
+        self.init(
+            questionKinds: [.binary, .choice, .score],
+            maximumQuestions: nil,
+            maximumChoiceOptions: maximumChoiceOptions,
+            maximumScoreLevels: maximumScoreLevels,
+            supportedAttachmentKinds: supportedAttachmentKinds,
+            maximumAttachments: nil,
+            probabilitySource: .unspecified
+        )
+    }
+
     /// Checks a batch of questions about a state against the limits.
     ///
     /// This method checks only the limits that the capabilities declare.
