@@ -319,7 +319,7 @@ Pass the server's URL and model name,
 and the path, API key, headers, limits, and extra request fields that the server needs:
 
 ```swift
-let model = SystemOneDecisionModel(
+let model = try SystemOneDecisionModel(
     baseURL: URL(string: "http://127.0.0.1:8000")!,
     path: "v1/systemone",
     modelID: "my-model",
@@ -334,7 +334,8 @@ The model sends the API key, if any, as a bearer token.
 The session checks each batch against `capabilities` before it sends a request.
 `extraBody` cannot set `model`, `state`, or `questions`,
 and `headers` cannot set `Authorization` or `Content-Type`;
-the initializer stops with a precondition failure if they do.
+the initializer throws `SystemOneDecisionModel.ConfigurationError`,
+which names the key, if they do.
 The model retries like the Jev model; pass `retryPolicy: .never` to disable retries.
 It sends text and JSON states only.
 

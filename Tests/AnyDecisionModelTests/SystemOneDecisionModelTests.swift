@@ -26,8 +26,8 @@ private func makeModel(
     capabilities: DecisionCapabilities = DecisionCapabilities(),
     extraBody: [String: JSONValue] = [:],
     retryPolicy: RetryPolicy = fastRetries
-) -> SystemOneDecisionModel {
-    SystemOneDecisionModel(
+) throws -> SystemOneDecisionModel {
+    try SystemOneDecisionModel(
         baseURL: host.baseURL,
         path: path,
         modelID: "my-model",
@@ -65,7 +65,7 @@ struct SystemOneDecisionModelTests {
     @Test func sendsRequestToDefaultPath() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         let response = try await session.decide([.binary(instructions: "Is this urgent?")])
 
@@ -87,7 +87,7 @@ struct SystemOneDecisionModelTests {
     func sendsRequestToCustomPath(path: String) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
-        let session = DecisionSession(model: makeModel(host, path: path), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host, path: path), state: "ticket")
 
         _ = try await session.probability(of: "Is this urgent?")
 
@@ -98,7 +98,7 @@ struct SystemOneDecisionModelTests {
     @Test func sendsAPIKeyAsBearerToken() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
-        let model = makeModel(host, apiKey: "secret-value")
+        let model = try makeModel(host, apiKey: "secret-value")
         let session = DecisionSession(model: model, state: "ticket")
 
         _ = try await session.probability(of: "Is this urgent?")
@@ -114,7 +114,7 @@ struct SystemOneDecisionModelTests {
     @Test func emptyAPIKeySendsNoAuthorization() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
-        let session = DecisionSession(model: makeModel(host, apiKey: ""), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host, apiKey: ""), state: "ticket")
 
         _ = try await session.probability(of: "Is this urgent?")
 
@@ -125,7 +125,7 @@ struct SystemOneDecisionModelTests {
     @Test func sendsExtraHeaders() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
-        let model = makeModel(
+        let model = try makeModel(
             host,
             apiKey: "key",
             headers: ["traceparent": "00-abc-def-01", "X-Title": "Example"]
@@ -146,7 +146,7 @@ struct SystemOneDecisionModelTests {
     @Test func mergesExtraBody() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
-        let model = makeModel(
+        let model = try makeModel(
             host,
             extraBody: [
                 "cache_salt": "tenant-1",
@@ -191,7 +191,7 @@ struct SystemOneDecisionModelTests {
             .text("Look at this."),
             .attachment(DecisionState.Attachment(imageData: Data([0x89]), mimeType: "image/png")),
         ])
-        let session = DecisionSession(model: makeModel(host), state: state)
+        let session = DecisionSession(model: try makeModel(host), state: state)
 
         let expected = DecisionError.unsupportedState("SystemOneDecisionModel does not support image attachments.")
         await #expect(throws: expected) {
@@ -218,27 +218,45 @@ struct SystemOneDecisionModelTests {
         #expect(SystemOneDecisionModel.reservedHeader(in: ["CONTENT-TYPE": "x"]) == "CONTENT-TYPE")
     }
 
-    #if os(macOS) || os(Linux)
-        @Test func initializerRejectsReservedBodyField() async {
-            await #expect(processExitsWith: .failure) {
-                _ = SystemOneDecisionModel(
-                    baseURL: URL(string: "https://example.invalid")!,
-                    modelID: "m",
-                    extraBody: ["questions": [:]]
-                )
-            }
+    @Test(arguments: ["model", "state", "questions"])
+    func initializerThrowsForReservedBodyField(key: String) {
+        #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: key)) {
+            _ = try SystemOneDecisionModel(
+                baseURL: URL(string: "https://example.invalid")!,
+                modelID: "m",
+                extraBody: [key: "x", "seed": 1]
+            )
         }
+    }
 
-        @Test func initializerRejectsReservedHeader() async {
-            await #expect(processExitsWith: .failure) {
-                _ = SystemOneDecisionModel(
-                    baseURL: URL(string: "https://example.invalid")!,
-                    modelID: "m",
-                    headers: ["content-type": "text/plain"]
-                )
-            }
+    @Test(arguments: ["Authorization", "authorization", "Content-Type", "CONTENT-TYPE"])
+    func initializerThrowsForReservedHeader(name: String) {
+        #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedHeader, key: name)) {
+            _ = try SystemOneDecisionModel(
+                baseURL: URL(string: "https://example.invalid")!,
+                modelID: "m",
+                headers: [name: "x", "traceparent": "y"]
+            )
         }
-    #endif
+    }
+
+    @Test func configurationErrorNamesKey() {
+        let body = SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: "model")
+        let header = SystemOneDecisionModel.ConfigurationError(kind: .reservedHeader, key: "authorization")
+        #expect(body.description == #"extraBody cannot set the reserved field "model"."#)
+        #expect(header.localizedDescription == #"headers cannot set the reserved header "authorization"."#)
+    }
+
+    @Test func initializerAcceptsUnreservedKeys() throws {
+        let model = try SystemOneDecisionModel(
+            baseURL: URL(string: "https://example.invalid")!,
+            modelID: "m",
+            headers: ["Accept-Language": "en", "X-Model": "y"],
+            extraBody: ["Model": "x", "keep_alive": 300]
+        )
+        #expect(model.headers == ["Accept-Language": "en", "X-Model": "y"])
+        #expect(model.extraBody == ["Model": "x", "keep_alive": 300])
+    }
 
     // MARK: - Capabilities
 
@@ -249,7 +267,7 @@ struct SystemOneDecisionModelTests {
             maximumChoiceOptions: 2,
             maximumScoreLevels: 3
         )
-        let model = makeModel(host, capabilities: capabilities)
+        let model = try makeModel(host, capabilities: capabilities)
         #expect(model.capabilities == capabilities)
         let session = DecisionSession(model: model, state: "ticket")
 
@@ -269,8 +287,8 @@ struct SystemOneDecisionModelTests {
         #expect(host.recorded.isEmpty)
     }
 
-    @Test func defaultCapabilitiesHaveNoLimits() {
-        let model = SystemOneDecisionModel(baseURL: URL(string: "https://example.invalid")!, modelID: "m")
+    @Test func defaultCapabilitiesHaveNoLimits() throws {
+        let model = try SystemOneDecisionModel(baseURL: URL(string: "https://example.invalid")!, modelID: "m")
         #expect(model.capabilities == DecisionCapabilities())
         #expect(model.capabilities.maximumQuestions == nil)
         #expect(model.capabilities.probabilitySource == .unspecified)
@@ -278,7 +296,7 @@ struct SystemOneDecisionModelTests {
 
     @Test func sessionRejectsUnsupportedQuestionKind() async throws {
         let host = StubURLProtocol.Host()
-        let model = makeModel(host, capabilities: DecisionCapabilities(questionKinds: [.binary]))
+        let model = try makeModel(host, capabilities: DecisionCapabilities(questionKinds: [.binary]))
         let session = DecisionSession(model: model, state: "ticket")
 
         await #expect(throws: DecisionError.self) {
@@ -294,7 +312,7 @@ struct SystemOneDecisionModelTests {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"error": "busy"}"#, statusCode: statusCode)
         host.enqueue(json: okResponse)
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         let probability = try await session.probability(of: "Is this urgent?")
 
@@ -306,7 +324,7 @@ struct SystemOneDecisionModelTests {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"error": "busy"}"#, statusCode: 429)
         host.enqueue(json: okResponse)
-        let session = DecisionSession(model: makeModel(host, retryPolicy: .never), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host, retryPolicy: .never), state: "ticket")
 
         do {
             _ = try await session.probability(of: "Is this urgent?")
@@ -320,7 +338,7 @@ struct SystemOneDecisionModelTests {
     @Test func doesNotRetryClientErrors() async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"error": "bad"}"#, statusCode: 400)
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         await #expect(throws: DecisionError.self) {
             _ = try await session.probability(of: "Is this urgent?")
@@ -335,7 +353,7 @@ struct SystemOneDecisionModelTests {
         host.enqueue(
             json: #"{"model": "m", "answers": {"0": {"type": "noul", "noul": 0.8, "confidence": 0.4}}}"#
         )
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         let response = try await session.decide([.binary(instructions: "Is this urgent?")])
 
@@ -356,7 +374,7 @@ struct SystemOneDecisionModelTests {
                            "cost": 0.00012, "cost_details": {"upstream": 0.0001}}}
                 """
         )
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         let response = try await session.decide([
             .binary(instructions: "Is this urgent?"),
@@ -385,13 +403,12 @@ struct SystemOneDecisionModelTests {
         host.enqueue(
             json: #"{"model": "m", "answers": {"0": {"type": "noul", "noul": 0.5}, "1": \#(answer)}}"#
         )
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         do {
             _ = try await session.decide([.binary(instructions: "A?"), .binary(instructions: "B?")])
             Issue.record("Expected an error.")
-        } catch DecisionError.invalidResponse(let detail) {
-            #expect(detail.contains("The model refused to answer"))
+        } catch DecisionError.invalidResponse {
         }
     }
 
@@ -400,16 +417,12 @@ struct SystemOneDecisionModelTests {
         host.enqueue(
             json: #"{"model": "m", "answers": {"0": {"type": "box", "box": [0.1, 0.2, 0.3, 0.4]}}}"#
         )
-        let session = DecisionSession(model: makeModel(host), state: "ticket")
+        let session = DecisionSession(model: try makeModel(host), state: "ticket")
 
         do {
             _ = try await session.decide(.binary(instructions: "Where is the dog?"))
             Issue.record("Expected an error.")
-        } catch DecisionError.invalidResponse(let detail) {
-            // On Linux, the error description escapes the quotation marks.
-            #expect(detail.contains("The answer type"))
-            #expect(detail.contains("box"))
-            #expect(detail.contains("is not supported."))
+        } catch DecisionError.invalidResponse {
         }
     }
 
@@ -546,34 +559,148 @@ struct SystemOneDecisionModelTests {
         #expect(named.url?.path == factory.url?.path)
     }
 
-    @Test func requestBodyHasSortedKeys() async throws {
-        let question = Question.binary(
-            instructions: "Is it urgent?",
-            criteria: BinaryCriteria(whenTrue: "today", whenFalse: "later")
-        )
-        let jev = try await record([question], about: "a/b") { host in
-            JevDecisionModel(baseURL: host.baseURL, apiKey: "key", session: StubURLProtocol.makeSession())
-        }
-        let ollama = try await record([question], about: "a/b") { host in
-            OllamaDecisionModel(
-                modelID: "nimble",
-                baseURL: host.baseURL,
-                apiKey: nil,
-                keepAlive: 300,
-                session: StubURLProtocol.makeSession()
-            )
-        }
+    // MARK: - Fixtures
 
-        let questions =
-            #"{"0":{"criteria":{"false":"later","true":"today"},"#
-            + #""instructions":"Is it urgent?","type":"noul"}}"#
-        #expect(
-            String(decoding: jev.body, as: UTF8.self)
-                == #"{"model":"jev-latest","questions":"# + questions + #","state":"a\/b"}"#
+    // These requests are written by hand from version 0.8's Jev and Ollama backends,
+    // with the object keys in sorted order.
+    // Version 0.8 sent the same fields and values,
+    // with the keys in an order that could change between requests.
+
+    /// The headers of a recorded request, with lowercase names.
+    ///
+    /// FoundationNetworking can change the letter case of header names.
+    private func lowercasedHeaders(_ recorded: StubURLProtocol.Recorded) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: recorded.headers.map { ($0.key.lowercased(), $0.value) })
+    }
+
+    /// Records one request from each model builder
+    /// and checks its URL, headers, and body bytes.
+    private func expectRequest(
+        _ questions: [Question],
+        about state: DecisionState,
+        from builders: [(StubURLProtocol.Host) -> any DecisionModel],
+        headers expectedHeaders: [String: String],
+        body expectedBody: String
+    ) async throws {
+        for build in builders {
+            let host = StubURLProtocol.Host()
+            host.enqueue(json: #"{"model": "m", "answers": {}}"#)
+            _ = try? await DecisionSession(model: build(host), state: state).decide(questions)
+            let recorded = try #require(host.recorded.first)
+            #expect(recorded.url?.absoluteString == "https://\(host.name)/v1/systemone")
+            // URLSession adds `Content-Length` for the body that the model sets.
+            var headers = lowercasedHeaders(recorded)
+            if let length = headers.removeValue(forKey: "content-length") {
+                #expect(length == String(recorded.body.count))
+            }
+            #expect(headers == expectedHeaders)
+            #expect(String(decoding: recorded.body, as: UTF8.self) == expectedBody)
+        }
+    }
+
+    @Test func jevRequestMatchesFixture() async throws {
+        try await expectRequest(
+            [
+                .choice(
+                    instructions: "Which team?",
+                    options: [ChoiceOption("billing", description: "payments"), ChoiceOption("sales")]
+                ),
+                .binary(
+                    instructions: "Urgent?",
+                    criteria: BinaryCriteria(whenTrue: "today", whenFalse: "can wait")
+                ),
+                .score(instructions: "How urgent?", levels: ["Low", "High"]),
+            ],
+            about: "Refund / urgent",
+            from: [
+                { JevDecisionModel(baseURL: $0.baseURL, apiKey: "test-key", session: StubURLProtocol.makeSession()) },
+                {
+                    SystemOneDecisionModel.jev(
+                        baseURL: $0.baseURL,
+                        apiKey: "test-key",
+                        session: StubURLProtocol.makeSession()
+                    )
+                },
+            ],
+            headers: [
+                "accept": "application/json",
+                "authorization": "Bearer test-key",
+                "content-type": "application/json",
+            ],
+            body: #"{"model":"jev-latest","questions":{"#
+                + #""0":{"criteria":{"billing":"payments","sales":null},"instructions":"Which team?","type":"choice"},"#
+                + #""1":{"criteria":{"false":"can wait","true":"today"},"instructions":"Urgent?","type":"noul"},"#
+                + #""2":{"criteria":["Low","High"],"instructions":"How urgent?","type":"score"}"#
+                + #"},"state":"Refund \/ urgent"}"#
         )
-        #expect(
-            String(decoding: ollama.body, as: UTF8.self)
-                == #"{"keep_alive":300,"model":"nimble","questions":"# + questions + #","state":"a\/b"}"#
+    }
+
+    @Test func ollamaLocalRequestMatchesFixture() async throws {
+        try await expectRequest(
+            [.binary(instructions: "Is this urgent?")],
+            about: .json(["id": 7, "tier": "gold"]),
+            from: [
+                {
+                    OllamaDecisionModel(
+                        modelID: "nimble",
+                        baseURL: $0.baseURL,
+                        apiKey: nil,
+                        keepAlive: 300,
+                        session: StubURLProtocol.makeSession()
+                    )
+                },
+                {
+                    SystemOneDecisionModel.ollama(
+                        modelID: "nimble",
+                        baseURL: $0.baseURL,
+                        apiKey: nil,
+                        keepAlive: 300,
+                        session: StubURLProtocol.makeSession()
+                    )
+                },
+            ],
+            headers: [
+                "accept": "application/json",
+                "content-type": "application/json",
+            ],
+            body: #"{"keep_alive":300,"model":"nimble","#
+                + #""questions":{"0":{"instructions":"Is this urgent?","type":"noul"}},"#
+                + #""state":{"id":7,"tier":"gold"}}"#
+        )
+    }
+
+    @Test func ollamaCloudRequestMatchesFixture() async throws {
+        try await expectRequest(
+            [.score(instructions: "How urgent?", levels: ["Low", "High"])],
+            about: "ticket",
+            from: [
+                {
+                    OllamaDecisionModel(
+                        modelID: "clef:cloud",
+                        baseURL: $0.baseURL,
+                        apiKey: "ollama-key",
+                        keepAlive: 0.5,
+                        session: StubURLProtocol.makeSession()
+                    )
+                },
+                {
+                    SystemOneDecisionModel.ollama(
+                        modelID: "clef:cloud",
+                        baseURL: $0.baseURL,
+                        apiKey: "ollama-key",
+                        keepAlive: 0.5,
+                        session: StubURLProtocol.makeSession()
+                    )
+                },
+            ],
+            headers: [
+                "accept": "application/json",
+                "authorization": "Bearer ollama-key",
+                "content-type": "application/json",
+            ],
+            body: #"{"keep_alive":0.5,"model":"clef:cloud","#
+                + #""questions":{"0":{"criteria":["Low","High"],"instructions":"How urgent?","type":"score"}},"#
+                + #""state":"ticket"}"#
         )
     }
 }

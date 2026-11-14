@@ -20,7 +20,7 @@ import Foundation
 /// For another server, pass its configuration to the initializer:
 ///
 /// ```swift
-/// let model = SystemOneDecisionModel(
+/// let model = try SystemOneDecisionModel(
 ///     baseURL: URL(string: "http://127.0.0.1:8000")!,
 ///     modelID: "my-model",
 ///     capabilities: DecisionCapabilities(maximumQuestions: 64)
@@ -82,8 +82,6 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     ///
     /// `extraBody` cannot set a field in ``reservedBodyFields``,
     /// and `headers` cannot set a header in ``reservedHeaders``.
-    /// A reserved key is a programming error:
-    /// the initializer stops the program with a precondition failure.
     ///
     /// - Parameters:
     ///   - baseURL: The API base URL.
@@ -98,6 +96,8 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     ///   - extraBody: Extra top-level fields to add to each request body.
     ///   - session: The URL session for requests.
     ///   - retryPolicy: The retry behavior for eligible HTTP failures.
+    /// - Throws: ``ConfigurationError`` if `extraBody` sets a reserved field
+    ///   or `headers` sets a reserved header.
     public init(
         baseURL: URL,
         path: String = defaultPath,
@@ -108,7 +108,13 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         extraBody: [String: JSONValue] = [:],
         session: URLSession = URLSession(configuration: .default),
         retryPolicy: RetryPolicy = .default
-    ) {
+    ) throws {
+        if let key = Self.reservedBodyField(in: extraBody) {
+            throw ConfigurationError(kind: .reservedBodyField, key: key)
+        }
+        if let name = Self.reservedHeader(in: headers) {
+            throw ConfigurationError(kind: .reservedHeader, key: name)
+        }
         self.init(
             baseURL: baseURL,
             path: path,
@@ -123,6 +129,11 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         )
     }
 
+    /// Creates a model without checking for reserved keys.
+    ///
+    /// The Jev and Ollama configurations use this initializer,
+    /// because they never set a reserved key.
+    /// The request encoder also skips reserved body fields.
     init(
         baseURL: URL,
         path: String,
@@ -135,12 +146,7 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         session: URLSession,
         retryPolicy: RetryPolicy
     ) {
-        if let key = Self.reservedBodyField(in: extraBody) {
-            preconditionFailure("extraBody cannot set the reserved field \"\(key)\".")
-        }
-        if let name = Self.reservedHeader(in: headers) {
-            preconditionFailure("headers cannot set the reserved header \"\(name)\".")
-        }
+        assert(Self.reservedBodyField(in: extraBody) == nil && Self.reservedHeader(in: headers) == nil)
 
         self.baseURL = baseURL
         self.path = path
@@ -222,9 +228,18 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     ///
     /// Eligible HTTP failures are retried according to ``retryPolicy``.
     private func send(_ request: SystemOneRequest) async throws -> SystemOneResponse {
-        let apiKey = tokenProvider().flatMap { $0.isEmpty ? nil : $0 }
-        if requiresAPIKey, apiKey == nil {
-            throw DecisionError.missingCredentials
+        // Version 0.8's Jev backend read the API key before it encoded the body
+        // and checked for cancellation before every attempt.
+        // Its Ollama backend encoded the body first
+        // and sent the first attempt without a check.
+        // The Jev configuration keeps the first order;
+        // every other configuration keeps the second.
+        var apiKey: String?
+        if requiresAPIKey {
+            apiKey = readAPIKey()
+            guard apiKey != nil else {
+                throw DecisionError.missingCredentials
+            }
         }
 
         let url = endpoint
@@ -236,14 +251,20 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         encoder.outputFormatting = .sortedKeys
         let body = try encoder.encode(request)
 
+        if !requiresAPIKey {
+            apiKey = readAPIKey()
+        }
         var headers = self.headers
         if let apiKey {
             headers["Authorization"] = "Bearer \(apiKey)"
         }
 
         var retrier = retryPolicy.makeIterator()
+        var isRetry = false
         while true {
-            try Task.checkCancellation()
+            if requiresAPIKey || isRetry {
+                try Task.checkCancellation()
+            }
             do {
                 let (data, _) = try await urlSession.send(.post, url: url, headers: headers, body: body)
                 do {
@@ -264,8 +285,15 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
                     retryAfter: responseHeaders["retry-after"]
                 )
                 try await Task.sleep(for: .seconds(delay))
+                isRetry = true
             }
         }
+    }
+
+    /// Returns the API key, or `nil` if it is missing or empty.
+    private func readAPIKey() -> String? {
+        guard let apiKey = tokenProvider(), !apiKey.isEmpty else { return nil }
+        return apiKey
     }
 }
 
@@ -347,5 +375,54 @@ extension SystemOneDecisionModel {
             session: session,
             retryPolicy: .never
         )
+    }
+}
+
+// MARK: - Configuration errors
+
+extension SystemOneDecisionModel {
+    /// An error in the configuration of a System One model.
+    ///
+    /// ``SystemOneDecisionModel/init(baseURL:path:modelID:apiKey:headers:capabilities:extraBody:session:retryPolicy:)``
+    /// throws this error before it creates the model.
+    public struct ConfigurationError: Error, Hashable, Sendable, LocalizedError, CustomStringConvertible {
+        /// A kind of configuration error.
+        #if hasAttribute(nonexhaustive)
+            @nonexhaustive
+        #endif
+        public enum Kind: Hashable, Sendable {
+            /// `extraBody` sets a field in ``SystemOneDecisionModel/reservedBodyFields``.
+            case reservedBodyField
+
+            /// `headers` sets a header in ``SystemOneDecisionModel/reservedHeaders``.
+            case reservedHeader
+        }
+
+        /// The kind of error.
+        public let kind: Kind
+
+        /// The body field or header name that is not allowed.
+        public let key: String
+
+        /// Creates a configuration error.
+        ///
+        /// - Parameters:
+        ///   - kind: The kind of error.
+        ///   - key: The body field or header name that is not allowed.
+        public init(kind: Kind, key: String) {
+            self.kind = kind
+            self.key = key
+        }
+
+        public var description: String {
+            switch kind {
+            case .reservedBodyField:
+                return "extraBody cannot set the reserved field \"\(key)\"."
+            case .reservedHeader:
+                return "headers cannot set the reserved header \"\(key)\"."
+            }
+        }
+
+        public var errorDescription: String? { description }
     }
 }

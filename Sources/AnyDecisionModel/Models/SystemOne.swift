@@ -167,7 +167,7 @@ struct SystemOneQuestion: Encodable {
 /// and `cached_tokens` and `cost` in `usage`.
 /// The decoder ignores these fields and every other unknown field.
 /// A `refusal` answer or an answer of an unknown type, such as `box`,
-/// fails to decode.
+/// fails to decode, as in version 0.8.
 struct SystemOneResponse: Decodable {
     /// The identifier of the model that answered.
     var model: String
@@ -207,7 +207,6 @@ struct SystemOneAnswer: Decodable {
         case probabilities
         case legend
         case confidence
-        case refusal
     }
 
     init(from decoder: any Decoder) throws {
@@ -241,25 +240,6 @@ struct SystemOneAnswer: Decodable {
                 probabilities: probabilities,
                 legend: Self.decodeLegend(from: container),
                 confidence: try container.decode(Double.self, forKey: .confidence)
-            )
-        } else if type == "refusal" || (type == nil && container.contains(.refusal)) {
-            // Some servers refuse one question and answer the others.
-            // Version 0.8 has no way to report one failed question,
-            // so a refusal fails the whole response.
-            let message = (try? container.decodeIfPresent(String.self, forKey: .refusal)) ?? nil
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: message.map { "The model refused to answer: \($0)" }
-                        ?? "The model refused to answer."
-                )
-            )
-        } else if let type {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "The answer type \"\(type)\" is not supported."
-                )
             )
         } else {
             throw DecodingError.dataCorrupted(
