@@ -58,14 +58,6 @@ import Foundation
         static let initialized: Void = {
             llama_log_set(llamaLogCallback, nil)
             llama_backend_init()
-            // The shared cache would otherwise keep weights loaded until the process ends.
-            // ggml's Metal device asserts at exit that no residency sets remain,
-            // so free the cached models and the backend from an exit handler,
-            // which runs before ggml's static destructors.
-            atexit {
-                modelCache.removeAll()
-                llama_backend_free()
-            }
         }()
     }
 
@@ -78,6 +70,9 @@ import Foundation
         text: UnsafePointer<CChar>?,
         userData: UnsafeMutableRawPointer?
     ) {
+        #if DEBUG
+            LlamaTestHooks.onLog.withLock { $0 }?()
+        #endif
         let minimum = LlamaRuntime.logLevel.withLock { $0 }
         guard LlamaRuntime.shouldWrite(level: level, minimum: minimum), let text else {
             return
@@ -110,6 +105,53 @@ import Foundation
     /// ```swift
     /// let model = LlamaDecisionModel(modelPath: "/path/to/model.gguf")
     /// ```
+    ///
+    /// llama.cpp's Metal backend stops a process with an assertion
+    /// if the process exits while a model has layers on the GPU.
+    /// So the model registers an exit handler when a load ends,
+    /// which stops new loads and decisions,
+    /// waits up to three seconds for running work,
+    /// and then frees every loaded model and session context.
+    /// After the handler starts, loads and decisions throw
+    /// ``DecisionError/modelUnavailable(_:)``.
+    /// The handler can't help in these cases:
+    ///
+    /// - An exit during the first load.
+    /// - An exit from inside a load, a decision, or the release of a model or a session,
+    ///   such as from a llama.cpp callback.
+    ///   On the thread that runs that work, the handler returns at once.
+    ///   On a thread that llama.cpp or another library owns,
+    ///   the handler can't tell that the work is waiting for the exit,
+    ///   so it waits the full three seconds and then frees nothing.
+    /// - Work that is still running after three seconds.
+    ///   On the CPU, one batch of ``batchSize`` prompt tokens can take longer;
+    ///   a smaller batch size shortens the wait.
+    /// - An exit that runs no exit handlers, such as `_exit` or a crash.
+    ///
+    /// To be certain that no model is loaded when the process exits,
+    /// wait until every call to a ``DecisionSession`` that uses a llama.cpp model returns,
+    /// start no new calls, release every such session,
+    /// and then call ``removeAllFromCache()``.
+    /// A session keeps its weights until it is released,
+    /// and the removal doesn't wait for a load that is still running,
+    /// which keeps its weights for the session that started it.
+    ///
+    /// To be certain that the assertion can't stop the process,
+    /// even with a model loaded on the GPU,
+    /// set the environment variable `GGML_METAL_NO_RESIDENCY` to any value
+    /// before the first model loads:
+    /// in the process's environment,
+    /// or with `setenv("GGML_METAL_NO_RESIDENCY", "1", 1)` before the first load,
+    /// because this package starts llama.cpp's backend at the first load.
+    /// If another library in the process uses llama.cpp,
+    /// set the variable before that library starts llama.cpp with `llama_backend_init`.
+    /// The Metal backend then doesn't use residency sets,
+    /// so the assertion has nothing to count.
+    /// Residency sets keep a model's Metal buffers wired for a keep-alive period;
+    /// without them, the OS can reclaim that memory while the GPU is idle,
+    /// and the next decision waits for it again.
+    /// This package doesn't set the variable.
+    /// A decision that is still running at exit can still crash.
     public struct LlamaDecisionModel: DecisionModel {
         /// The verbosity level for llama.cpp logging.
         public enum LogLevel: Int, Hashable, Comparable, Sendable, CaseIterable {
@@ -280,11 +322,27 @@ import Foundation
         /// Removes this model's weights from the shared cache.
         ///
         /// Existing sessions keep their loaded weights until they are released.
+        /// The removal doesn't wait for a load that is running,
+        /// and that load still gives its weights to the sessions that wait for it.
+        ///
+        /// After the exit handler starts, the removal still releases the cache's reference.
+        /// If the handler freed the weights, releasing them frees nothing again;
+        /// if it freed nothing, the last release frees them as usual.
         public func removeFromCache() {
             modelCache.remove(cacheKey)
         }
 
         /// Removes all llama.cpp decision models from the shared cache.
+        ///
+        /// Existing sessions keep their loaded weights until they are released,
+        /// and the removal doesn't wait for a load that is running.
+        /// To be certain that no model is loaded when the process exits,
+        /// wait until every decision and prewarm returns,
+        /// start no new ones, release every session,
+        /// and then call this method.
+        /// The package's exit handler is best effort; see ``LlamaDecisionModel``.
+        ///
+        /// After the exit handler starts, the removal behaves as ``removeFromCache()`` does.
         public static func removeAllFromCache() {
             modelCache.removeAll()
         }
@@ -294,6 +352,9 @@ import Foundation
         }
 
         func loadModel() async throws -> LlamaModel {
+            // Check before any other validation,
+            // so that every request after the exit handler starts throws the same error.
+            try LlamaLifecycle.shared.stopIfExiting()
             let modelPath = modelPath
             let gpuLayers = gpuLayers
             do {
@@ -301,7 +362,10 @@ import Foundation
                     guard FileManager.default.fileExists(atPath: modelPath) else {
                         throw DecisionError.modelUnavailable("No model file at \"\(modelPath)\".")
                     }
-                    return try LlamaModel(modelPath: modelPath, gpuLayers: gpuLayers)
+                    // The exit handler waits for this load.
+                    return try LlamaLifecycle.shared.perform {
+                        try LlamaModel(modelPath: modelPath, gpuLayers: gpuLayers)
+                    }
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -320,12 +384,17 @@ import Foundation
     /// A loaded llama.cpp model and its vocabulary.
     ///
     /// Creating contexts from one model at the same time is not safe,
-    /// so context creation takes `contextLock`.
+    /// so context creation takes `contextMutex`,
+    /// which doesn't block a thread, unlike a lock.
     /// Reading the vocabulary needs no lock.
+    ///
+    /// Create a model only inside ``LlamaLifecycle/perform(_:)``.
     final class LlamaModel: @unchecked Sendable {
-        let pointer: OpaquePointer
-        let vocab: OpaquePointer
-        let contextLock = NSLock()
+        let resources: LlamaModelResources
+        let contextMutex = AsyncMutex()
+
+        var pointer: OpaquePointer { resources.model }
+        var vocab: OpaquePointer { resources.vocab }
 
         init(modelPath: String, gpuLayers: Int32) throws {
             // Initialize the backend lazily, before loading the model.
@@ -334,16 +403,27 @@ import Foundation
             var params = llama_model_default_params()
             params.n_gpu_layers = gpuLayers
             params.load_mode = LLAMA_LOAD_MODE_MMAP
+            params.progress_callback = { _, _ in
+                #if DEBUG
+                    LlamaTestHooks.onLoadProgress.withLock { $0 }?()
+                #endif
+                // Returning false stops the load, so that the exit handler doesn't wait for all of it.
+                return !LlamaLifecycle.shared.isStopping
+            }
 
             guard let model = llama_model_load_from_file(modelPath, params) else {
+                try LlamaLifecycle.shared.stopIfExiting()
                 throw DecisionError.modelUnavailable("Failed to load the model at \"\(modelPath)\".")
             }
-            pointer = model
-            vocab = llama_model_get_vocab(model)
+            resources = LlamaModelResources(model: model, vocab: llama_model_get_vocab(model))
+            LlamaLifecycle.shared.track(resources)
+            LlamaRuntime.registerExitHandler()
         }
 
         deinit {
-            llama_model_free(pointer)
+            // The resources free the session contexts and the model,
+            // unless the exit handler freed them already.
+            LlamaLifecycle.shared.free(resources)
         }
     }
 
@@ -392,6 +472,7 @@ import Foundation
         private let retainedModel = Locked<LlamaModel?>(nil)
 
         // The context and batch are used only while `mutex` is held.
+        // The model's resources track the context, so that the exit handler can free it.
         private var context: OpaquePointer?
         private var batch: llama_batch?
 
@@ -403,24 +484,33 @@ import Foundation
             if let batch {
                 llama_batch_free(batch)
             }
-            if let context {
-                llama_free(context)
+            // The context exists only if the weights are retained.
+            // The resources free it, unless the exit handler freed it already.
+            if let context, let loaded = retainedModel.withLock({ $0 }) {
+                LlamaLifecycle.shared.free(context, of: loaded.resources)
             }
         }
 
         func prewarm(for state: DecisionState) async throws {
+            try LlamaLifecycle.shared.stopIfExiting()
             let loaded = try await retainedLoadedModel()
             try await mutex.withLock {
-                _ = try self.ensureContext(for: loaded)
+                _ = try await self.ensureContext(for: loaded)
             }
         }
 
         func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
+            // A retained model skips `loadModel()`, so check here too.
+            try LlamaLifecycle.shared.stopIfExiting()
             let questions = request.questions
             let state = request.state
             let loaded = try await retainedLoadedModel()
             return try await mutex.withLock {
-                try self.decide(questions, about: state, loaded: loaded)
+                let context = try await self.ensureContext(for: loaded)
+                // The exit handler waits for this decision.
+                return try LlamaLifecycle.shared.perform {
+                    try self.decide(questions, about: state, loaded: loaded, context: context)
+                }
             }
         }
 
@@ -442,9 +532,9 @@ import Foundation
         private func decide(
             _ questions: [Question],
             about state: DecisionState,
-            loaded: LlamaModel
+            loaded: LlamaModel,
+            context: OpaquePointer
         ) throws -> DecisionSession.Response {
-            let context = try ensureContext(for: loaded)
             let vocab = loaded.vocab
             let vocabSize = Int(llama_vocab_n_tokens(vocab))
 
@@ -537,23 +627,33 @@ import Foundation
         }
 
         /// Returns the session's context, creating it on first use.
-        private func ensureContext(for loaded: LlamaModel) throws -> OpaquePointer {
+        ///
+        /// Call it only while `mutex` is held.
+        private func ensureContext(for loaded: LlamaModel) async throws -> OpaquePointer {
             if let context { return context }
 
-            var params = llama_context_default_params()
-            params.n_ctx = model.contextSize
-            params.n_batch = model.batchSize
-            params.n_threads = model.threads
-            params.n_threads_batch = model.threads
+            try await loaded.contextMutex.withLock {
+                // The exit handler waits for this work,
+                // and the context is tracked before the work ends,
+                // so the handler can't free the model in between.
+                try LlamaLifecycle.shared.perform {
+                    var params = llama_context_default_params()
+                    params.n_ctx = self.model.contextSize
+                    params.n_batch = self.model.batchSize
+                    params.n_threads = self.model.threads
+                    params.n_threads_batch = self.model.threads
 
-            let created: OpaquePointer? = loaded.contextLock.withLock {
-                llama_init_from_model(loaded.pointer, params)
+                    guard let created = llama_init_from_model(loaded.pointer, params) else {
+                        throw DecisionError.modelUnavailable("Failed to create a llama.cpp context.")
+                    }
+                    loaded.resources.add(created)
+                    self.context = created
+                }
             }
-            guard let created else {
+            guard let context else {
                 throw DecisionError.modelUnavailable("Failed to create a llama.cpp context.")
             }
-            context = created
-            return created
+            return context
         }
 
         /// Returns the session's batch, allocating it on first use.
@@ -693,6 +793,11 @@ import Foundation
             let capacity = Int(model.batchSize)
             var start = 0
             while start < tokens.count {
+                #if DEBUG
+                    LlamaTestHooks.beforeBatch.withLock { $0 }?()
+                #endif
+                // The exit handler waits for this decision, so stop it early.
+                try LlamaLifecycle.shared.stopIfExiting()
                 let count = min(capacity, tokens.count - start)
                 batch.n_tokens = Int32(count)
                 for i in 0 ..< count {
