@@ -6,21 +6,83 @@ import Foundation
 #if Llama
     import LlamaSwift
 
-    /// Global storage for the current log level threshold.
-    /// This is needed because the C callback can't capture Swift context.
-    /// Access is synchronized by llama.cpp's internal logging mechanism.
-    nonisolated(unsafe) private var currentLogLevel: LlamaDecisionModel.LogLevel = .warn
+    /// The state that llama.cpp keeps for the whole process.
+    enum LlamaRuntime {
+        /// The minimum level of the messages that the log callback writes,
+        /// which ``LlamaDecisionModel/logLevel`` changes.
+        ///
+        /// A C callback can't capture Swift context,
+        /// so the callback reads this value.
+        static let logLevel = Locked(LlamaDecisionModel.LogLevel.warn)
 
-    /// Custom log callback that filters messages based on the current log level.
+        /// The key of a thread-local value
+        /// that is set if the callback wrote the last message on the thread
+        /// that wasn't a continuation.
+        ///
+        /// llama.cpp writes a message and its continuations from one thread,
+        /// and messages from other threads can come in between.
+        private static let continuationKey: pthread_key_t = {
+            var key = pthread_key_t()
+            precondition(pthread_key_create(&key, nil) == 0, "Failed to create a thread-local key.")
+            return key
+        }()
+
+        /// Returns whether the callback writes a message,
+        /// and records the decision for the message's continuations
+        /// on the current thread.
+        ///
+        /// A continuation has no level of its own,
+        /// so it follows the decision for the last message on the same thread,
+        /// even if the level changed after that message.
+        /// At ``LlamaDecisionModel/LogLevel/none``, no message is written.
+        static func shouldWrite(level: ggml_log_level, minimum: LlamaDecisionModel.LogLevel) -> Bool {
+            let writes: Bool
+            if level == GGML_LOG_LEVEL_CONT {
+                writes = pthread_getspecific(continuationKey) != nil
+            } else {
+                writes = minimum != .none && level.rawValue >= minimum.ggmlLevel.rawValue
+                pthread_setspecific(continuationKey, writes ? UnsafeRawPointer(bitPattern: 1) : nil)
+            }
+            return writes && minimum != .none
+        }
+
+        /// Installs the log callback and initializes the llama.cpp backend, once.
+        ///
+        /// This is the only place that sets a llama.cpp logger.
+        /// `llama.h` says that the logger state is global
+        /// and that its functions aren't thread-safe,
+        /// and llama.cpp reads the callback on every message
+        /// without synchronization.
+        /// So the callback is installed before any other llama.cpp call
+        /// and never replaced.
+        static let initialized: Void = {
+            llama_log_set(llamaLogCallback, nil)
+            llama_backend_init()
+            // The shared cache would otherwise keep weights loaded until the process ends.
+            // ggml's Metal device asserts at exit that no residency sets remain,
+            // so free the cached models and the backend from an exit handler,
+            // which runs before ggml's static destructors.
+            atexit {
+                modelCache.removeAll()
+                llama_backend_free()
+            }
+        }()
+    }
+
+    /// Writes llama.cpp messages at or above ``LlamaDecisionModel/logLevel`` to standard error.
+    ///
+    /// Besides the write, each message costs one lock and unlock to read the level,
+    /// and one or two reads or writes of a thread-local value.
     private func llamaLogCallback(
         level: ggml_log_level,
         text: UnsafePointer<CChar>?,
         userData: UnsafeMutableRawPointer?
     ) {
-        guard level.rawValue >= currentLogLevel.ggmlLevel.rawValue else { return }
-        if let text = text {
-            fputs(String(cString: text), stderr)
+        let minimum = LlamaRuntime.logLevel.withLock { $0 }
+        guard LlamaRuntime.shouldWrite(level: level, minimum: minimum), let text else {
+            return
         }
+        fputs(String(cString: text), stderr)
     }
 
     /// A decision model that runs a GGUF model locally with llama.cpp.
@@ -82,11 +144,20 @@ import Foundation
         ///
         /// This is a global setting that affects all `LlamaDecisionModel` instances
         /// since llama.cpp uses a single global log callback.
-        public nonisolated(unsafe) static var logLevel: LogLevel = .warn {
-            didSet {
-                currentLogLevel = logLevel
-                llama_log_set(llamaLogCallback, nil)
-            }
+        /// The model installs its callback once, before its first call to llama.cpp,
+        /// and setting this property changes only the level that the callback reads,
+        /// so you can set it at any time, from any thread.
+        /// The default is ``LogLevel/warn``.
+        ///
+        /// Another library in the process that uses llama.cpp,
+        /// such as `LlamaLanguageModel` in AnyLanguageModel
+        /// or `LlamaEmbeddingModel` in AnyEmbeddingModel,
+        /// can install its own callback.
+        /// The callback that was installed last decides which messages appear,
+        /// and this setting has no effect on it.
+        public static var logLevel: LogLevel {
+            get { LlamaRuntime.logLevel.withLock { $0 } }
+            set { LlamaRuntime.logLevel.withLock { $0 = newValue } }
         }
 
         /// The default GPU layer count for the current platform.
@@ -246,27 +317,6 @@ import Foundation
 
     private let modelCache = ModelCache<LlamaModel>()
 
-    /// Serializes one-time llama.cpp backend initialization.
-    private let backendLock = NSLock()
-    nonisolated(unsafe) private var backendInitialized = false
-
-    private func initializeBackendIfNeeded() {
-        backendLock.lock()
-        defer { backendLock.unlock() }
-        guard !backendInitialized else { return }
-        llama_backend_init()
-        llama_log_set(llamaLogCallback, nil)
-        // The shared cache would otherwise keep weights loaded until the process ends.
-        // ggml's Metal device asserts at exit that no residency sets remain,
-        // so free the cached models and the backend from an exit handler,
-        // which runs before ggml's static destructors.
-        atexit {
-            modelCache.removeAll()
-            llama_backend_free()
-        }
-        backendInitialized = true
-    }
-
     /// A loaded llama.cpp model and its vocabulary.
     ///
     /// Creating contexts from one model at the same time is not safe,
@@ -278,7 +328,8 @@ import Foundation
         let contextLock = NSLock()
 
         init(modelPath: String, gpuLayers: Int32) throws {
-            initializeBackendIfNeeded()
+            // Initialize the backend lazily, before loading the model.
+            LlamaRuntime.initialized
 
             var params = llama_model_default_params()
             params.n_gpu_layers = gpuLayers

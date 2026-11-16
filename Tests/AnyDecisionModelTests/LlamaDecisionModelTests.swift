@@ -36,6 +36,17 @@ import Testing
             }
         }
 
+        @Test func logLevelCanChangeFromManyThreads() {
+            let original = LlamaDecisionModel.logLevel
+            defer { LlamaDecisionModel.logLevel = original }
+            DispatchQueue.concurrentPerform(iterations: 1_000) { index in
+                LlamaDecisionModel.logLevel = LlamaDecisionModel.LogLevel.allCases[index % 5]
+                _ = LlamaDecisionModel.logLevel
+            }
+            LlamaDecisionModel.logLevel = .error
+            #expect(LlamaDecisionModel.logLevel == .error)
+        }
+
         @Test func tokenLogProbabilities() {
             // Label "yes" has tokens 0 and 1; label "no" has token 2.
             let logits: [Float] = [2, 0, 1, -1]
