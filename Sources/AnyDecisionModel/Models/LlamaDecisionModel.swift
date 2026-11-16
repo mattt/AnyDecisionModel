@@ -128,6 +128,14 @@ import Foundation
     ///   a smaller batch size shortens the wait.
     /// - An exit that runs no exit handlers, such as `_exit` or a crash.
     ///
+    /// If freeing the models takes more than ten seconds,
+    /// the handler aborts the process, so that the exit can't hang.
+    /// A crash report shows `abortAfterExitCleanupTimeout()` in its backtrace,
+    /// which first tries to write one line to standard error.
+    /// If the cleanup ends just after the limit,
+    /// the cleanup's thread can abort first, without the line,
+    /// and the backtrace shows `abortAfterLateExitCleanup()`.
+    ///
     /// To be certain that no model is loaded when the process exits,
     /// wait until every call to a ``DecisionSession`` that uses a llama.cpp model returns,
     /// start no new calls, release every such session,
