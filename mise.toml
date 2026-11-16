@@ -53,7 +53,16 @@ run = "mise run _swift -- test --traits CoreAI"
 description = "Run the library tests with the Llama trait (set LLAMA_MODEL_PATH to a GGUF file for inference tests)"
 run = "mise run _swift -- test --traits Llama"
 
+[tasks.lint]
+description = "Check Swift formatting in the repository"
+run = "mise run _swift -- format lint --strict --recursive ."
+
+[tasks.format]
+description = "Format Swift files in the repository"
+run = "mise run _swift -- format --in-place --recursive ."
+
 [tasks."_swift"]
+description = "Run the platform Swift compiler from Xcode on macOS"
 hide = true
 run = '''
 #!/usr/bin/env bash
@@ -67,6 +76,7 @@ exec swift "$@"
 '''
 
 [tasks."_swift:mlx"]
+description = "Run Xcode Swift with the Metal toolchain for MLX"
 hide = true
 run = '''
 #!/usr/bin/env bash

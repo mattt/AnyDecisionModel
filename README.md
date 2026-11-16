@@ -567,6 +567,11 @@ The repository uses [mise](https://mise.jdx.dev/) tasks:
 
 | Task | Description |
 | --- | --- |
+| `mise run setup` | Resolve package dependencies. |
+| `mise run lint` | Check Swift formatting. |
+| `mise run format` | Format Swift files. |
+| `mise run build:ios` | Build for iOS. |
+| `mise run build:linux` | Build and test in Docker on Linux. |
 | `mise run build` | Build the core library. |
 | `mise run build:mlx` | Build with the MLX trait. |
 | `mise run build:coreai` | Build with the CoreAI trait. |
