@@ -92,10 +92,10 @@ struct QuestionSpec: Decodable {
     }
 }
 
-/// Returns the contents of a file in `Fixtures/JointSchema`.
-func fixtureData(_ name: String) throws -> Data {
+/// Returns the contents of a fixture file, by default in `Fixtures/JointSchema`.
+func fixtureData(_ name: String, subdirectory: String = "Fixtures/JointSchema") throws -> Data {
     let url = try #require(
-        Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures/JointSchema")
+        Bundle.module.url(forResource: name, withExtension: nil, subdirectory: subdirectory)
     )
     return try Data(contentsOf: url)
 }
