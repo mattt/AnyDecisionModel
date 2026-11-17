@@ -7,6 +7,7 @@ import Foundation
     import MLXLLM
     import MLXLMCommon
     import MLXNN
+    import MLXVLM
     import Tokenizers
 
     /// A decision model that runs a causal language model locally with MLX.
@@ -30,7 +31,49 @@ import Foundation
     /// ```swift
     /// let model = MLXDecisionModel(modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit")
     /// ```
+    ///
+    /// The model also runs Liquid AI's d1 decision models on LFM2-VL,
+    /// such as `LiquidAI/d1-3B-MLX-8bit`, with their own prompt and readout.
+    /// See ``PromptFormat``.
     public struct MLXDecisionModel: DecisionModel {
+        /// How the model writes prompts and reads answers.
+        #if hasAttribute(nonexhaustive)
+            @nonexhaustive
+        #endif
+        public enum PromptFormat: Hashable, Sendable {
+            /// Selects the format from the model's `config.json` when the model loads.
+            ///
+            /// A model whose `model_type` is `lfm2_vl`
+            /// and whose `auto_map.AutoModel` ends in `.D1Model` uses ``d1LFM2``,
+            /// and every other model uses ``standard``.
+            case automatic
+
+            /// The package's prompt for causal language models.
+            ///
+            /// The prompt has the system prompt and a user message with the state and the question,
+            /// written with the model's chat template.
+            /// Binary answers are read from "yes" and "no",
+            /// choices from A to Z, and scores from 0 to 9.
+            /// Each answer sums the probability of its label's single-token variants.
+            case standard
+
+            /// The prompt and readout of Liquid AI's d1 decision models on LFM2-VL, such as d1-3B.
+            ///
+            /// This format doesn't cover d1 models on LFM3, such as d1-2B and d1-Omni-2B,
+            /// which use a different prompt and readout.
+            ///
+            /// This follows `prompt.py` in the
+            /// [LiquidAI/d1-3B](https://huggingface.co/LiquidAI/d1-3B) repository:
+            /// a user turn with the state, then `QUESTION:`, the question, and its reply instructions,
+            /// with no system prompt.
+            /// A JSON state is written with an indent of two spaces and sorted keys.
+            /// Choice options get d1's option codes,
+            /// and each answer scores the largest log-probability among its token variants.
+            /// ``MLXDecisionModel/systemPrompt`` and ``MLXDecisionModel/closedThinkFallback``
+            /// don't apply.
+            case d1LFM2
+        }
+
         /// The default system prompt for local decision models.
         public static let defaultSystemPrompt = TokenScoring.defaultSystemPrompt
 
@@ -76,9 +119,14 @@ import Foundation
         /// The tokenizer must have both `<think>` and `</think>` markers.
         /// This option is off by default because models without a thinking mode
         /// can also have these markers.
+        /// The ``PromptFormat/d1LFM2`` format ignores it,
+        /// including when ``PromptFormat/automatic`` selects that format.
         public var closedThinkFallback: Bool
 
         /// The system prompt.
+        ///
+        /// The ``PromptFormat/d1LFM2`` format has no system prompt and ignores this value,
+        /// including when ``PromptFormat/automatic`` selects that format.
         public var systemPrompt: String
 
         /// The largest number of prompts evaluated together in one forward pass.
@@ -96,6 +144,13 @@ import Foundation
             didSet { maximumBatchSize = max(1, maximumBatchSize) }
         }
 
+        /// How the model writes prompts and reads answers.
+        ///
+        /// It defaults to ``PromptFormat/automatic``,
+        /// which uses ``PromptFormat/d1LFM2`` for d1 models on LFM2-VL
+        /// and ``PromptFormat/standard`` for other models.
+        public var promptFormat: PromptFormat
+
         /// Creates an MLX decision model.
         ///
         /// - Parameters:
@@ -109,7 +164,9 @@ import Foundation
         ///   - closedThinkFallback: Whether to append a closed thinking block
         ///     if the template omits it and the tokenizer has thinking markers.
         ///     Defaults to `false`.
+        ///     The ``PromptFormat/d1LFM2`` format ignores it.
         ///   - systemPrompt: The system prompt.
+        ///     The ``PromptFormat/d1LFM2`` format ignores it.
         ///   - maximumBatchSize: The largest number of prompts evaluated together in one forward pass.
         ///     Defaults to ``defaultMaximumBatchSize``.
         public init(
@@ -123,6 +180,53 @@ import Foundation
             systemPrompt: String = MLXDecisionModel.defaultSystemPrompt,
             maximumBatchSize: Int = MLXDecisionModel.defaultMaximumBatchSize
         ) {
+            self.init(
+                modelID: modelID,
+                hub: hub,
+                directory: directory,
+                calibration: calibration,
+                rotationDebiasing: rotationDebiasing,
+                prefixCaching: prefixCaching,
+                closedThinkFallback: closedThinkFallback,
+                systemPrompt: systemPrompt,
+                maximumBatchSize: maximumBatchSize,
+                promptFormat: .automatic
+            )
+        }
+
+        /// Creates an MLX decision model with a prompt format.
+        ///
+        /// - Parameters:
+        ///   - modelID: The Hugging Face model identifier.
+        ///   - hub: A Hugging Face Hub client for downloads. Pass `nil` for the default client.
+        ///   - directory: A local directory with the model files.
+        ///     If you pass a directory, the model loads from it instead of downloading.
+        ///   - calibration: A calibration for answer probabilities. Pass `nil` for raw probabilities.
+        ///   - rotationDebiasing: Whether to average choice results over rotations of the option order.
+        ///   - prefixCaching: Whether sessions reuse a cache for the shared prompt prefix.
+        ///   - closedThinkFallback: Whether to append a closed thinking block
+        ///     if the template omits it and the tokenizer has thinking markers.
+        ///     Defaults to `false`.
+        ///     The ``PromptFormat/d1LFM2`` format ignores it.
+        ///   - systemPrompt: The system prompt.
+        ///     The ``PromptFormat/d1LFM2`` format ignores it.
+        ///   - maximumBatchSize: The largest number of prompts evaluated together in one forward pass.
+        ///     Defaults to ``defaultMaximumBatchSize``.
+        ///   - promptFormat: How the model writes prompts and reads answers.
+        ///     Defaults to ``PromptFormat/automatic``.
+        @_disfavoredOverload
+        public init(
+            modelID: String,
+            hub: HubClient? = nil,
+            directory: URL? = nil,
+            calibration: Calibration? = nil,
+            rotationDebiasing: Bool = false,
+            prefixCaching: Bool = false,
+            closedThinkFallback: Bool = false,
+            systemPrompt: String = MLXDecisionModel.defaultSystemPrompt,
+            maximumBatchSize: Int = MLXDecisionModel.defaultMaximumBatchSize,
+            promptFormat: PromptFormat = .automatic
+        ) {
             self.modelID = modelID
             self.hub = hub
             self.directory = directory
@@ -132,6 +236,7 @@ import Foundation
             self.closedThinkFallback = closedThinkFallback
             self.systemPrompt = systemPrompt
             self.maximumBatchSize = max(1, maximumBatchSize)
+            self.promptFormat = promptFormat
         }
 
         public var capabilities: DecisionCapabilities {
@@ -167,7 +272,26 @@ import Foundation
             directory?.standardizedFileURL.path ?? modelID
         }
 
-        func loadContainer() async throws -> ModelContainer {
+        /// Returns the format that applies to a loaded model.
+        ///
+        /// - Parameter declaresD1LFM2: Whether the model's `config.json` declares a d1 model.
+        func resolvedFormat(declaresD1LFM2: Bool) -> PromptFormat {
+            guard promptFormat == .automatic else { return promptFormat }
+            return declaresD1LFM2 ? .d1LFM2 : .standard
+        }
+
+        /// Loads the model, or returns it from the shared cache.
+        ///
+        /// An LFM2-VL model (`model_type` `lfm2_vl`), such as d1, loads through `MLXVLM`,
+        /// because `MLXLLM` doesn't have that architecture.
+        /// Only the language model runs; the vision tower stays loaded but unused.
+        /// Every other model loads through `MLXLLM`.
+        /// The loader depends only on `config.json`, not on ``promptFormat``,
+        /// because models with the same path or identifier share one loaded container.
+        /// The model chooses the factory itself instead of calling `loadModelContainer`,
+        /// which tries `MLXVLM` before `MLXLLM`
+        /// and would load model types that both register, such as `gemma3`, as vision models.
+        func loadModel() async throws -> LoadedModel {
             let modelID = modelID
             let hub = hub
             let directory = directory
@@ -175,29 +299,63 @@ import Foundation
                 return try await containerCache.value(for: cacheKey) {
                     // mlx-swift-lm 3 takes explicit downloader and tokenizer loaders.
                     // The macros back them with HubClient and AutoTokenizer.
-                    let container: ModelContainer
+                    let tokenizerLoader = #huggingFaceTokenizerLoader()
+                    let downloader = directory == nil ? (hub.map { #hubDownloader($0) } ?? #hubDownloader()) : nil
+
+                    let configuration: Data
                     if let directory {
-                        container = try await loadModelContainer(
-                            from: directory,
-                            using: #huggingFaceTokenizerLoader()
+                        configuration = try Data(contentsOf: directory.appendingPathComponent("config.json"))
+                    } else {
+                        let snapshot = try await downloader!.download(
+                            id: modelID,
+                            revision: "main",
+                            matching: ["config.json"],
+                            useLatest: false,
+                            progressHandler: { _ in }
                         )
-                    } else if let hub {
-                        container = try await loadModelContainer(
-                            from: #hubDownloader(hub),
-                            using: #huggingFaceTokenizerLoader(),
-                            id: modelID
+                        configuration = try Data(contentsOf: snapshot.appendingPathComponent("config.json"))
+                    }
+                    let declaresD1LFM2 = D1LFM2Prompt.isD1LFM2Configuration(configuration)
+                    let architecture = ModelArchitecture(configuration: configuration)
+
+                    let container: ModelContainer
+                    if architecture == .lfm2VL {
+                        var modelDirectory = directory
+                        if modelDirectory == nil {
+                            // These are the files that mlx-swift-lm's loaders download.
+                            modelDirectory = try await downloader!.download(
+                                id: modelID,
+                                revision: "main",
+                                matching: ["*.safetensors", "*.json", "*.jinja"],
+                                useLatest: false,
+                                progressHandler: { _ in }
+                            )
+                        }
+                        container = try await loadLFM2VL(
+                            from: modelDirectory!,
+                            configuration: configuration,
+                            using: tokenizerLoader
+                        )
+                    } else if let directory {
+                        container = try await LLMModelFactory.shared.loadContainer(
+                            from: directory,
+                            using: tokenizerLoader
                         )
                     } else {
-                        container = try await loadModelContainer(
-                            from: #hubDownloader(),
-                            using: #huggingFaceTokenizerLoader(),
-                            id: modelID
+                        container = try await LLMModelFactory.shared.loadContainer(
+                            from: downloader!,
+                            using: tokenizerLoader,
+                            configuration: ModelConfiguration(id: modelID, revision: "main")
                         )
                     }
                     await container.perform { context in
-                        convertFloatingPointParametersToFloat32(context.model)
+                        // A vision model's vision tower never runs, so it keeps its parameters.
+                        convertFloatingPointParametersToFloat32(
+                            context.model,
+                            under: architecture == .lfm2VL ? "language_model" : nil
+                        )
                     }
-                    return container
+                    return LoadedModel(container: container, declaresD1LFM2: declaresD1LFM2)
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -207,6 +365,84 @@ import Foundation
                 throw DecisionError.modelUnavailable(String(describing: error))
             }
         }
+    }
+
+    /// Loads an LFM2-VL model, such as d1, through MLXVLM.
+    ///
+    /// mlx-swift-lm 3.32.3 reads the MLP width of LFM2-VL's language model from `block_ff_dim` only,
+    /// and LFM2.5-VL checkpoints such as d1 give it as `intermediate_size`.
+    /// When ``amendedLFM2VLConfiguration(_:)`` changes the configuration,
+    /// the model loads from a directory that links to every other file
+    /// and holds the amended `config.json`.
+    ///
+    /// This is a workaround.
+    /// [ml-explore/mlx-swift-lm#695](https://github.com/ml-explore/mlx-swift-lm/pull/695),
+    /// merged on 2026-10-16, reads `intermediate_size`,
+    /// but mlx-swift-lm 3.32.3 doesn't include it.
+    /// Remove this workaround and ``amendedLFM2VLConfiguration(_:)``
+    /// once the package requires a release with that fix.
+    private func loadLFM2VL(
+        from directory: URL,
+        configuration: Data,
+        using tokenizerLoader: any TokenizerLoader
+    ) async throws -> ModelContainer {
+        guard let amended = amendedLFM2VLConfiguration(configuration) else {
+            return try await VLMModelFactory.shared.loadContainer(from: directory, using: tokenizerLoader)
+        }
+        let linked = try makeLinkedDirectory(to: directory, excluding: ["config.json"])
+        defer { try? FileManager.default.removeItem(at: linked) }
+        try amended.write(to: linked.appendingPathComponent("config.json"))
+        return try await VLMModelFactory.shared.loadContainer(from: linked, using: tokenizerLoader)
+    }
+
+    /// Returns an LFM2-VL configuration with the text model keys that mlx-swift-lm 3.32.3 reads,
+    /// or `nil` if it already has them.
+    ///
+    /// Transformers 5 writes the MLP width of the text model as `intermediate_size`
+    /// and the rotary base as `rope_parameters.rope_theta`.
+    /// This copies them to `block_ff_dim` and `rope_theta` when those keys are missing.
+    func amendedLFM2VLConfiguration(_ data: Data) -> Data? {
+        guard var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            var text = object["text_config"] as? [String: Any]
+        else { return nil }
+        var changed = false
+        if text["block_ff_dim"] == nil, let width = text["intermediate_size"] {
+            text["block_ff_dim"] = width
+            changed = true
+        }
+        if text["rope_theta"] == nil,
+            let rope = text["rope_parameters"] as? [String: Any],
+            let theta = rope["rope_theta"]
+        {
+            text["rope_theta"] = theta
+            changed = true
+        }
+        guard changed else { return nil }
+        object["text_config"] = text
+        return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    /// The architecture that decides which mlx-swift-lm library loads a model.
+    enum ModelArchitecture: Equatable {
+        /// A causal language model, which `MLXLLM` loads.
+        case languageModel
+
+        /// An LFM2-VL model (`model_type` `lfm2_vl`), which `MLXVLM` loads.
+        case lfm2VL
+
+        /// Reads the architecture from a model's `config.json`.
+        init(configuration data: Data) {
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            self = object?["model_type"] as? String == "lfm2_vl" ? .lfm2VL : .languageModel
+        }
+    }
+
+    /// A loaded model and what its `config.json` declares.
+    struct LoadedModel: Sendable {
+        let container: ModelContainer
+
+        /// Whether the model's `config.json` declares a d1 model.
+        let declaresD1LFM2: Bool
     }
 
     /// Converts a model's half-precision parameters to float32,
@@ -224,9 +460,15 @@ import Foundation
     /// in float32, it was 0.075 on every path.
     /// The conversion makes Qwen3 4B 4-bit 11% larger, from 2.26 GB to 2.51 GB,
     /// and doubles the size of an unquantized half-precision model.
-    private func convertFloatingPointParametersToFloat32(_ model: any LanguageModel) {
+    ///
+    /// - Parameters:
+    ///   - model: The model.
+    ///   - module: The key of the module whose parameters to convert,
+    ///     or `nil` to convert every parameter.
+    private func convertFloatingPointParametersToFloat32(_ model: any LanguageModel, under module: String? = nil) {
         let parameters = model.parameters().flattened().compactMap { key, value -> (String, MLXArray)? in
-            value.dtype == .bfloat16 || value.dtype == .float16 ? (key, value.asType(.float32)) : nil
+            if let module, !key.hasPrefix(module + ".") { return nil }
+            return value.dtype == .bfloat16 || value.dtype == .float16 ? (key, value.asType(.float32)) : nil
         }
         guard !parameters.isEmpty else { return }
         model.update(parameters: ModuleParameters.unflattened(parameters))
@@ -235,7 +477,7 @@ import Foundation
 
     // MARK: - Shared weights
 
-    private let containerCache = ModelCache<ModelContainer>()
+    private let containerCache = ModelCache<LoadedModel>()
 
     /// Lets one request at a time tokenize its prompts.
     private let tokenizationGate = AsyncMutex()
@@ -265,31 +507,50 @@ import Foundation
         }
 
         func prewarm(for state: DecisionState) async throws {
-            let container = try await model.loadContainer()
+            let loaded = try await model.loadModel()
             guard model.prefixCaching else { return }
-            try await container.perform { context in
-                try self.preparePrefix(for: state, context: context)
+            let format = model.resolvedFormat(declaresD1LFM2: loaded.declaresD1LFM2)
+            try await loaded.container.perform { context in
+                try self.preparePrefix(for: state, format: format, context: context)
             }
         }
 
         func decide(_ request: DecisionRequest) async throws -> DecisionSession.Response {
             let questions = request.questions
             let state = request.state
-            let container = try await model.loadContainer()
+            let loaded = try await model.loadModel()
+            let container = loaded.container
+            let format = model.resolvedFormat(declaresD1LFM2: loaded.declaresD1LFM2)
             let tokenizer = await tokenizer(from: container)
 
             // Check every token mapping before running inference.
             let encode = { (text: String) in tokenizer.encode(text: text, addSpecialTokens: false) }
             let plans = try questions.enumerated().map { index, question -> Plan in
                 let labels = TokenScoring.labels(for: question)
-                let tokenMap = try TokenScoring.tokenMap(for: labels, index: index, encode: encode)
                 var rotations = [Array(labels.indices)]
                 if model.rotationDebiasing, case .choice = question, labels.count > 1 {
                     rotations = labels.indices.map { r in
                         Array(labels.indices[r...]) + Array(labels.indices[..<r])
                     }
                 }
-                return Plan(question: question, tokenMap: tokenMap, rotations: rotations)
+                switch format {
+                case .d1LFM2:
+                    // d1's option codes can depend on the option order, so each rotation has its own tokens.
+                    let prompts = try rotations.map { order in
+                        let rendered = try D1LFM2Prompt.render(
+                            question,
+                            optionOrder: order,
+                            index: index,
+                            encode: encode
+                        )
+                        return PlannedPrompt(order: order, tokenMap: rendered.tokenGroups, d1Question: rendered)
+                    }
+                    return Plan(question: question, prompts: prompts)
+                case .automatic, .standard:
+                    let tokenMap = try TokenScoring.tokenMap(for: labels, index: index, encode: encode)
+                    let prompts = rotations.map { PlannedPrompt(order: $0, tokenMap: tokenMap, d1Question: nil) }
+                    return Plan(question: question, prompts: prompts)
+                }
             }
 
             // Prompt preparation needs only the CPU, so it runs outside the container's lock.
@@ -301,20 +562,36 @@ import Foundation
             }
             if model.prefixCaching {
                 try await container.perform { context in
-                    try self.preparePrefix(for: state, context: context)
+                    try self.preparePrefix(for: state, format: format, context: context)
                 }
             }
             let (jobs, preparationDuration) = try await prepared
 
             return try await container.perform { context in
-                try self.respond(to: plans, jobs: jobs, preparationDuration: preparationDuration, context: context)
+                try self.respond(
+                    to: plans,
+                    jobs: jobs,
+                    format: format,
+                    preparationDuration: preparationDuration,
+                    context: context
+                )
             }
         }
 
         private struct Plan: Sendable {
             let question: Question
+            /// One prompt for each option-order rotation.
+            let prompts: [PlannedPrompt]
+        }
+
+        /// One prompt for a question, before tokenization.
+        private struct PlannedPrompt: Sendable {
+            /// The order of the answers in the prompt, as indices into the question's answers.
+            let order: [Int]
+            /// The token IDs for each answer, in prompt order.
             let tokenMap: [[Int]]
-            let rotations: [[Int]]
+            /// The rendered question for the d1 format, or `nil` for the standard format.
+            let d1Question: D1LFM2Prompt.RenderedQuestion?
         }
 
         /// Returns the container's tokenizer.
@@ -342,7 +619,7 @@ import Foundation
             tokenizer: any MLXLMCommon.Tokenizer
         ) async throws -> [Job] {
             let prompts = plans.enumerated().flatMap { planIndex, plan in
-                plan.rotations.map { (planIndex: planIndex, order: $0) }
+                plan.prompts.map { (planIndex: planIndex, prompt: $0) }
             }
             let taskCount = min(tokenizationTaskCount, prompts.count)
             return try await withThrowingTaskGroup(of: [(Int, Job)].self) { group in
@@ -350,14 +627,20 @@ import Foundation
                     group.addTask {
                         try stride(from: task, to: prompts.count, by: taskCount).map { index in
                             try Task.checkCancellation()
-                            let prompt = prompts[index]
-                            let user = try TokenScoring.userMessage(
+                            let (planIndex, prompt) = prompts[index]
+                            let tokens = try self.promptTokens(
                                 state: state,
-                                question: plans[prompt.planIndex].question,
-                                optionOrder: prompt.order
+                                question: plans[planIndex].question,
+                                prompt: prompt,
+                                tokenizer: tokenizer
                             )
-                            let tokens = try self.promptTokens(user: user, tokenizer: tokenizer)
-                            return (index, Job(planIndex: prompt.planIndex, order: prompt.order, tokens: tokens))
+                            let job = Job(
+                                planIndex: planIndex,
+                                order: prompt.order,
+                                tokens: tokens,
+                                tokenMap: prompt.tokenMap
+                            )
+                            return (index, job)
                         }
                     }
                 }
@@ -373,11 +656,12 @@ import Foundation
         private func respond(
             to plans: [Plan],
             jobs: [Job],
+            format: MLXDecisionModel.PromptFormat,
             preparationDuration: Duration,
             context: ModelContext
         ) throws -> DecisionSession.Response {
             let start = ContinuousClock.now
-            let results = try evaluate(jobs, tokenMaps: plans.map(\.tokenMap), context: context)
+            let results = try evaluate(jobs, context: context)
             let elapsed = preparationDuration + start.duration(to: .now)
 
             var answers: [Answer] = []
@@ -386,23 +670,27 @@ import Foundation
 
             for (planIndex, plan) in plans.enumerated() {
                 let isBinary = if case .binary = plan.question { true } else { false }
-                var totals = [Double](repeating: 0, count: plan.tokenMap.count)
+                var totals = [Double](repeating: 0, count: plan.prompts[0].order.count)
                 var mass = 0.0
                 var cachedTokenCount = 0
                 var evaluatedTokenCount = 0
                 var jobCount = 0
 
                 for (job, result) in zip(jobs, results) where job.planIndex == planIndex {
-                    let (logMasses, allowedMass) = TokenScoring.logMasses(result.tokenLogProbabilities)
+                    // d1 scores each answer by its best token; the standard format sums its tokens.
+                    let (logMasses, allowedMass) =
+                        format == .d1LFM2
+                        ? D1LFM2Prompt.scores(result.tokenLogProbabilities)
+                        : TokenScoring.logMasses(result.tokenLogProbabilities)
                     let probabilities = (model.calibration ?? .identity).probabilities(
                         logMasses: logMasses,
                         binary: isBinary
                     )
                     // Position i in this rotation holds answer order[i].
                     for (position, answerIndex) in job.order.enumerated() {
-                        totals[answerIndex] += probabilities[position] / Double(plan.rotations.count)
+                        totals[answerIndex] += probabilities[position] / Double(plan.prompts.count)
                     }
-                    mass += allowedMass / Double(plan.rotations.count)
+                    mass += allowedMass / Double(plan.prompts.count)
                     cachedTokenCount += result.cachedTokenCount
                     evaluatedTokenCount += job.tokens.count - result.cachedTokenCount
                     inputTokenCount += job.tokens.count
@@ -427,6 +715,33 @@ import Foundation
                 usage: DecisionSession.Usage(inputTokenCount: inputTokenCount, outputTokenCount: 0),
                 diagnostics: diagnostics
             )
+        }
+
+        /// Renders and tokenizes the prompt for a question about a state.
+        private func promptTokens(
+            state: DecisionState,
+            question: Question,
+            prompt: PlannedPrompt,
+            tokenizer: any MLXLMCommon.Tokenizer
+        ) throws -> [Int] {
+            if let d1Question = prompt.d1Question {
+                return try d1PromptTokens(state: state, question: d1Question, tokenizer: tokenizer)
+            }
+            let user = try TokenScoring.userMessage(state: state, question: question, optionOrder: prompt.order)
+            return try promptTokens(user: user, tokenizer: tokenizer)
+        }
+
+        /// Tokenizes a d1 prompt.
+        ///
+        /// The prompt has its own chat markup and beginning-of-sequence token,
+        /// so the tokenizer adds no special tokens, as in `prompt.py`.
+        private func d1PromptTokens(
+            state: DecisionState,
+            question: D1LFM2Prompt.RenderedQuestion,
+            tokenizer: any MLXLMCommon.Tokenizer
+        ) throws -> [Int] {
+            let text = try D1LFM2Prompt.prompt(state: state, question: question, bos: tokenizer.bosToken ?? "")
+            return tokenizer.encode(text: text, addSpecialTokens: false)
         }
 
         private func promptTokens(user: String, tokenizer: any MLXLMCommon.Tokenizer) throws -> [Int] {
@@ -460,15 +775,28 @@ import Foundation
         /// Fills the session's prefix cache for a state, if it is not already filled.
         ///
         /// The prefix is the longest run of tokens that two different questions share,
-        /// which covers the system prompt and the state.
-        private func preparePrefix(for state: DecisionState, context: ModelContext) throws {
+        /// which covers the system prompt, if any, and the state.
+        private func preparePrefix(
+            for state: DecisionState,
+            format: MLXDecisionModel.PromptFormat,
+            context: ModelContext
+        ) throws {
             if prefix.state == state, prefix.layers != nil { return }
 
             let tokenizer = context.tokenizer
-            let probeA = try TokenScoring.userMessage(state: state, question: .binary(instructions: "A"))
-            let probeB = try TokenScoring.userMessage(state: state, question: .binary(instructions: "Z"))
-            let tokensA = try promptTokens(user: probeA, tokenizer: tokenizer)
-            let tokensB = try promptTokens(user: probeB, tokenizer: tokenizer)
+            let tokensA: [Int]
+            let tokensB: [Int]
+            if format == .d1LFM2 {
+                let probeA = D1LFM2Prompt.RenderedQuestion(text: "A", tokenGroups: [])
+                let probeB = D1LFM2Prompt.RenderedQuestion(text: "Z", tokenGroups: [])
+                tokensA = try d1PromptTokens(state: state, question: probeA, tokenizer: tokenizer)
+                tokensB = try d1PromptTokens(state: state, question: probeB, tokenizer: tokenizer)
+            } else {
+                let probeA = try TokenScoring.userMessage(state: state, question: .binary(instructions: "A"))
+                let probeB = try TokenScoring.userMessage(state: state, question: .binary(instructions: "Z"))
+                tokensA = try promptTokens(user: probeA, tokenizer: tokenizer)
+                tokensB = try promptTokens(user: probeB, tokenizer: tokenizer)
+            }
             let shared = zip(tokensA, tokensB).prefix { $0 == $1 }.count
             let prefixTokens = Array(tokensA.prefix(shared))
 
@@ -502,6 +830,8 @@ import Foundation
             let planIndex: Int
             let order: [Int]
             let tokens: [Int]
+            /// The token IDs for each answer, in prompt order.
+            let tokenMap: [[Int]]
         }
 
         private struct EvaluationResult {
@@ -522,7 +852,6 @@ import Foundation
         /// The prompts, the caches, and the results of one call to `evaluate`.
         private struct Evaluation {
             let jobs: [Job]
-            let tokenMaps: [[[Int]]]
             let context: ModelContext
             let maximumBatchSize: Int
             var results: [EvaluationResult?]
@@ -535,11 +864,7 @@ import Foundation
         /// When the model's cache supports it, several prompts run in one forward pass.
         /// Prefill boundaries must not depend on the other prompts in the request:
         /// changing those boundaries can change probabilities through rounding.
-        private func evaluate(
-            _ jobs: [Job],
-            tokenMaps: [[[Int]]],
-            context: ModelContext
-        ) throws -> [EvaluationResult] {
+        private func evaluate(_ jobs: [Job], context: ModelContext) throws -> [EvaluationResult] {
             let empty = try makeCache(for: context.model)
             let maximumBatchSize = empty is [BatchKVCache] ? model.maximumBatchSize : 1
 
@@ -547,7 +872,6 @@ import Foundation
             let groups = maximumBatchSize > 1 ? [Array(jobs.indices)] : jobs.indices.map { [$0] }
             var evaluation = Evaluation(
                 jobs: jobs,
-                tokenMaps: tokenMaps,
                 context: context,
                 maximumBatchSize: maximumBatchSize,
                 results: [EvaluationResult?](repeating: nil, count: jobs.count)
@@ -637,7 +961,7 @@ import Foundation
 
                 var indices: [Int32] = []
                 for (row, job) in batch.enumerated() {
-                    for id in evaluation.tokenMaps[jobs[job].planIndex].joined() {
+                    for id in jobs[job].tokenMap.joined() {
                         indices.append(Int32(row * vocabularySize + id))
                     }
                 }
@@ -646,7 +970,7 @@ import Foundation
                 var offset = 0
                 for job in batch {
                     // Group the log-probabilities by label, in label position order.
-                    let tokenLogProbabilities = evaluation.tokenMaps[jobs[job].planIndex].map { ids in
+                    let tokenLogProbabilities = jobs[job].tokenMap.map { ids in
                         defer { offset += ids.count }
                         return gathered[offset ..< offset + ids.count].map(Double.init)
                     }

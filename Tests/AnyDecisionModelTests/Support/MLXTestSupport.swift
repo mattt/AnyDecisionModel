@@ -11,6 +11,11 @@ import Foundation
     /// Set `ENABLE_MLX_HEAD_TESTS=1` to run them. They download Clef-flash 4-bit (6.2 GB).
     let shouldRunMLXHeadTests = isMLXEnabled(by: "ENABLE_MLX_HEAD_TESTS")
 
+    /// Whether tests that download and run Liquid AI's d1-3B are enabled.
+    ///
+    /// Set `ENABLE_MLX_D1_TESTS=1` to run them. They download d1-3B 8-bit (3.72 GB).
+    let shouldRunMLXD1Tests = isMLXEnabled(by: "ENABLE_MLX_D1_TESTS")
+
     private func isMLXEnabled(by variable: String) -> Bool {
         #if arch(arm64)
             guard ProcessInfo.processInfo.environment[variable] != nil else { return false }

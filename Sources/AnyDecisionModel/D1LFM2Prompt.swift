@@ -1,6 +1,6 @@
 import Foundation
 
-/// Builds prompts and reads answers for Liquid AI's d1 decision models.
+/// Builds prompts and reads answers for Liquid AI's d1 decision models on LFM2-VL, such as d1-3B.
 ///
 /// This follows `prompt.py` in the
 /// [LiquidAI/d1-3B](https://huggingface.co/LiquidAI/d1-3B) repository
@@ -16,7 +16,7 @@ import Foundation
 /// and a softmax over those scores gives the answer probabilities.
 ///
 /// The helpers here do not depend on MLX, so they can be tested with synthetic logits.
-enum D1Prompt {
+enum D1LFM2Prompt {
     /// The beginning of a chat turn.
     static let turnStart = "<|im_start|>"
 
@@ -62,7 +62,7 @@ enum D1Prompt {
     /// This matches an LFM2-VL model (`model_type` `lfm2_vl`)
     /// whose `auto_map.AutoModel` ends in `.D1Model`, as mlx-vlm and llama.cpp detect d1.
     /// d1 models on other backbones, such as LFM3, use a different prompt, so they don't match.
-    static func isD1Configuration(_ data: Data) -> Bool {
+    static func isD1LFM2Configuration(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             object["model_type"] as? String == "lfm2_vl",
             let autoMap = object["auto_map"] as? [String: Any],
