@@ -49,8 +49,34 @@ import Foundation
 ///
 /// An API key is sent only in the `Authorization` header
 /// and is never included in descriptions or errors.
-/// The model sends text and JSON states only;
-/// a state with attachments is rejected before any request is sent.
+///
+/// By default, the model sends text and JSON states only,
+/// and a state with attachments is rejected before any request is sent.
+/// Set ``imageEncoding`` to send the images of a ``DecisionState/segments(_:)`` state
+/// in a top-level `images` array, in segment order,
+/// with the text segments joined by newlines as the state:
+///
+/// ```swift
+/// let model = try SystemOneDecisionModel(
+///     baseURL: URL(string: "http://127.0.0.1:8080")!,
+///     modelID: "LiquidAI/d1-Omni-2B-GGUF:Q8_0",
+///     imageEncoding: .dataURL
+/// )
+/// let session = DecisionSession(model: model, state: .segments([
+///     .text("A photo from a customer's damage claim:"),
+///     .attachment(DecisionState.Attachment(imageData: jpeg, mimeType: "image/jpeg")),
+/// ]))
+/// let damaged = try await session.probability(of: "Is the item damaged?")
+/// ```
+///
+/// The model sends image data only.
+/// It rejects an attachment with a URL source or with no data,
+/// and an attachment of another kind,
+/// before any request is sent.
+/// It does not send TypeSafe's `assets` form of images,
+/// audio or video attachments,
+/// or images in question instructions,
+/// and it does not ask `box` questions.
 public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     /// The default path of the System One endpoint.
     public static let defaultPath = "v1/systemone"
@@ -58,7 +84,10 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     /// The request body fields that the model writes.
     ///
     /// ``extraBody`` and ``CustomOptions/extraBody`` cannot contain these keys.
-    public static let reservedBodyFields: Set<String> = ["model", "state", "questions"]
+    /// The model writes `images` only for a state with images,
+    /// but the field is always reserved,
+    /// so that a request cannot send images that the session did not check.
+    public static let reservedBodyFields: Set<String> = ["model", "state", "questions", "images"]
 
     /// The request headers that the model writes.
     ///
@@ -80,7 +109,14 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     public let headers: [String: String]
 
     /// The limits and features of the server.
+    ///
+    /// The supported attachment kinds follow ``imageEncoding``:
+    /// `[.image]` if it is set, and no kinds if it is `nil`.
     public let capabilities: DecisionCapabilities
+
+    /// How the model sends the images in a state,
+    /// or `nil` to send no attachments.
+    public let imageEncoding: ImageEncoding?
 
     /// Extra top-level fields that the model adds to each request body.
     ///
@@ -101,6 +137,71 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     let requiresAPIKey: Bool
 
     /// Creates a model for a server that implements the System One API.
+    ///
+    /// `extraBody` cannot set a field in ``reservedBodyFields``,
+    /// and `headers` cannot set a header in ``reservedHeaders``.
+    ///
+    /// - Parameters:
+    ///   - baseURL: The API base URL.
+    ///   - path: The path of the System One endpoint, relative to `baseURL`.
+    ///   - modelID: The model identifier that the request sends.
+    ///   - apiKey: The API key, or a closure that returns it.
+    ///     The model sends the key as a bearer token.
+    ///     If the key is `nil` or empty, the model sends no `Authorization` header.
+    ///   - headers: Extra request headers.
+    ///   - capabilities: The limits and features of the server.
+    ///     The default has no limits and an unspecified probability source.
+    ///     The model replaces the supported attachment kinds
+    ///     with the kinds that `imageEncoding` sends.
+    ///   - imageEncoding: How the model sends the images in a state,
+    ///     or `nil` to send no attachments.
+    ///   - extraBody: Extra top-level fields to add to each request body.
+    ///   - session: The URL session for requests.
+    ///   - retryPolicy: The retry behavior for eligible HTTP failures.
+    /// - Throws: ``ConfigurationError`` if `extraBody` sets a reserved field
+    ///   or `headers` sets a reserved header.
+    @_disfavoredOverload
+    public init(
+        baseURL: URL,
+        path: String = defaultPath,
+        modelID: String,
+        apiKey tokenProvider: @escaping @autoclosure @Sendable () -> String? = nil,
+        headers: [String: String] = [:],
+        capabilities: DecisionCapabilities = DecisionCapabilities(),
+        imageEncoding: ImageEncoding?,
+        extraBody: [String: JSONValue] = [:],
+        session: URLSession = URLSession(configuration: .default),
+        retryPolicy: RetryPolicy = .default
+    ) throws {
+        if let key = Self.reservedBodyField(in: extraBody) {
+            throw ConfigurationError(kind: .reservedBodyField, key: key)
+        }
+        if let name = Self.reservedHeader(in: headers) {
+            throw ConfigurationError(kind: .reservedHeader, key: name)
+        }
+        self.init(
+            baseURL: baseURL,
+            path: path,
+            modelID: modelID,
+            tokenProvider: tokenProvider,
+            requiresAPIKey: false,
+            headers: headers,
+            capabilities: capabilities,
+            imageEncoding: imageEncoding,
+            extraBody: extraBody,
+            session: session,
+            retryPolicy: retryPolicy
+        )
+    }
+
+    /// Creates a model for a server that implements the System One API,
+    /// with the parameters of version 0.9.
+    ///
+    /// The model sends no attachments.
+    /// This initializer keeps version 0.9 calls and references,
+    /// such as `SystemOneDecisionModel.init`, compiling with the same meaning.
+    /// To send images, use
+    /// ``init(baseURL:path:modelID:apiKey:headers:capabilities:imageEncoding:extraBody:session:retryPolicy:)``.
     ///
     /// `extraBody` cannot set a field in ``reservedBodyFields``,
     /// and `headers` cannot set a header in ``reservedHeaders``.
@@ -145,6 +246,7 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
             requiresAPIKey: false,
             headers: headers,
             capabilities: capabilities,
+            imageEncoding: nil,
             extraBody: extraBody,
             session: session,
             retryPolicy: retryPolicy
@@ -164,6 +266,7 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         requiresAPIKey: Bool,
         headers: [String: String],
         capabilities: DecisionCapabilities,
+        imageEncoding: ImageEncoding? = nil,
         extraBody: [String: JSONValue],
         session: URLSession,
         retryPolicy: RetryPolicy
@@ -176,7 +279,10 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
         self.tokenProvider = tokenProvider
         self.requiresAPIKey = requiresAPIKey
         self.headers = headers
+        var capabilities = capabilities
+        capabilities.supportedAttachmentKinds = imageEncoding == nil ? [] : [.image]
         self.capabilities = capabilities
+        self.imageEncoding = imageEncoding
         self.extraBody = extraBody
         self.urlSession = session
         self.retryPolicy = retryPolicy
@@ -243,6 +349,7 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
                 model: model.modelID,
                 state: request.state,
                 questions: Dictionary(uniqueKeysWithValues: zip(keys, questions.map(SystemOneQuestion.init))),
+                imageEncoding: model.imageEncoding,
                 extraBody: extraBody
             )
             let response = try await model.send(body, headers: headers)
@@ -418,6 +525,64 @@ extension SystemOneDecisionModel {
             session: session,
             retryPolicy: .never
         )
+    }
+}
+
+// MARK: - Image encoding
+
+extension SystemOneDecisionModel {
+    /// How a System One model sends the images in a state.
+    ///
+    /// The model sends the images in a top-level `images` array, in segment order.
+    /// The servers that read this array differ in the form of each image.
+    #if hasAttribute(nonexhaustive)
+        @nonexhaustive
+    #endif
+    public enum ImageEncoding: Hashable, Sendable {
+        /// A data URL with the image's MIME type,
+        /// such as `data:image/jpeg;base64,/9j/4AAQ...`.
+        ///
+        /// llama.cpp's `llama-server` reads this form,
+        /// and Liquid's API documents it.
+        case dataURL
+
+        /// The base64 encoding of the image bytes, with no prefix,
+        /// such as `/9j/4AAQ...`.
+        ///
+        /// Ollama documents this form.
+        case base64
+
+        /// Returns an image attachment in this encoding.
+        ///
+        /// - Throws: ``DecisionError/unsupportedState(_:)``
+        ///   if the attachment is not an image,
+        ///   has a URL source,
+        ///   or has no data.
+        func encode(_ attachment: DecisionState.Attachment) throws -> String {
+            guard attachment.kind == .image else {
+                throw DecisionError.unsupportedState(
+                    "SystemOneDecisionModel does not support \(attachment.kind.rawValue) attachments."
+                )
+            }
+            switch attachment.source {
+            case .url:
+                throw DecisionError.unsupportedState(
+                    "SystemOneDecisionModel does not send attachment URLs. Pass the image bytes as data."
+                )
+            case .data(let data, let mimeType):
+                guard !data.isEmpty else {
+                    throw DecisionError.unsupportedState(
+                        "SystemOneDecisionModel does not send an empty image attachment."
+                    )
+                }
+                switch self {
+                case .dataURL:
+                    return "data:\(mimeType);base64,\(data.base64EncodedString())"
+                case .base64:
+                    return data.base64EncodedString()
+                }
+            }
+        }
     }
 }
 

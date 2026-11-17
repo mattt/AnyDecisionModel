@@ -16,6 +16,10 @@ struct SystemOneRequest: Encodable {
     /// The questions, keyed by question identifier.
     var questions: [String: SystemOneQuestion]
 
+    /// How the request sends the images in a segments state,
+    /// or `nil` to send no attachments.
+    var imageEncoding: SystemOneDecisionModel.ImageEncoding? = nil
+
     /// Extra top-level fields, such as Ollama's `keep_alive`.
     ///
     /// The fields are encoded after the core fields.
@@ -42,19 +46,43 @@ struct SystemOneRequest: Encodable {
         static let model = FieldKey("model")
         static let state = FieldKey("state")
         static let questions = FieldKey("questions")
+        static let images = FieldKey("images")
     }
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: FieldKey.self)
         try container.encode(model, forKey: .model)
-        // Encode the JSON value, not the state's tagged `Codable` form,
-        // so that every JSON state is sent unchanged.
-        // A state with attachments throws, so that it is never uploaded.
-        try container.encode(state.textOrJSONValue(), forKey: .state)
+        if let imageEncoding, case .segments(let segments) = state, !state.attachments.isEmpty {
+            // Servers place the images before the state in the prompt,
+            // so the state is the text of the segments alone.
+            try container.encode(Self.joinedText(segments), forKey: .state)
+            try container.encode(
+                state.attachments.map { try imageEncoding.encode($0) },
+                forKey: .images
+            )
+        } else {
+            // Encode the JSON value, not the state's tagged `Codable` form,
+            // so that every JSON state is sent unchanged.
+            // A state with attachments throws, so that it is never uploaded.
+            try container.encode(state.textOrJSONValue(), forKey: .state)
+        }
         try container.encode(questions, forKey: .questions)
         for (key, value) in extraBody where !SystemOneDecisionModel.reservedBodyFields.contains(key) {
             try container.encode(value, forKey: FieldKey(key))
         }
+    }
+
+    /// Returns the text segments of a state with images,
+    /// joined by newlines,
+    /// without empty segments.
+    ///
+    /// ``GeminiDecisionModel`` joins adjacent text segments the same way.
+    static func joinedText(_ segments: [DecisionState.Segment]) -> String {
+        segments.compactMap { segment in
+            guard case .text(let text) = segment, !text.isEmpty else { return nil }
+            return text
+        }
+        .joined(separator: "\n")
     }
 }
 
