@@ -6,10 +6,12 @@ import Foundation
 
 /// A decision model that calls a System One model in Ollama.
 ///
+/// - Important: This type is deprecated, and version 1.0 removes it.
+///   Use ``SystemOneDecisionModel/ollama(modelID:baseURL:apiKey:keepAlive:session:)``,
+///   which has the same configuration and behavior.
+///
 /// The model sends each batch to `POST /v1/systemone`
 /// and returns Ollama's probabilities and confidence values unchanged.
-/// It has the same configuration and behavior as
-/// ``SystemOneDecisionModel/ollama(modelID:baseURL:apiKey:keepAlive:session:)``.
 /// It needs Ollama v0.35.0 or later,
 /// or v0.40.5 or later for cloud models.
 ///
@@ -21,10 +23,18 @@ import Foundation
 /// and is never included in descriptions or errors.
 ///
 /// ```swift
-/// let model = OllamaDecisionModel(modelID: "nimble")
+/// let model = SystemOneDecisionModel.ollama(modelID: "nimble")
 /// let session = DecisionSession(model: model, state: .text(ticket))
 /// let urgent = try await session.probability(of: "Does this convey urgency?")
 /// ```
+@available(
+    *,
+    deprecated,
+    message: """
+        Use SystemOneDecisionModel.ollama(modelID:baseURL:apiKey:keepAlive:session:). \
+        Version 1.0 removes OllamaDecisionModel.
+        """
+)
 public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     /// The default base URL for a local Ollama server.
     public static let defaultBaseURL = URL(string: "http://localhost:11434")!
