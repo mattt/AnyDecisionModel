@@ -322,6 +322,88 @@ Pass `gpuLayers: 0` for CPU-only execution,
 and `closedThinkFallback: true` for reasoning models
 whose templates open a thinking block.
 
+llama.cpp's Metal backend stops a process with an assertion
+if the process exits while a model has layers on the GPU,
+and a decision that is still running at exit can crash on the GPU or the CPU.
+So `LlamaDecisionModel` registers an exit handler when a load ends.
+The handler stops new loads and decisions,
+waits up to three seconds for running work to stop at its next batch of prompt tokens,
+and then frees every loaded model and session context.
+After the handler starts,
+loads and decisions throw `DecisionError.modelUnavailable`.
+
+The handler is best effort.
+The process can still stop with the assertion in these cases:
+
+- It exits during the first load,
+  because the handler is registered when a load ends.
+- It exits from inside a load, a decision, or the release of a model or a session,
+  for example from a llama.cpp callback.
+  On the thread that runs that work,
+  the handler returns at once and frees nothing.
+  On a thread that llama.cpp or another library owns,
+  the handler waits the full three seconds and then frees nothing.
+- Work is still running after three seconds.
+  The handler then frees nothing.
+  On the CPU, one batch of `batchSize` prompt tokens can take longer;
+  a smaller batch size shortens the wait.
+- It exits without running exit handlers,
+  for example with `_exit` or after a crash.
+
+If freeing the models takes more than ten seconds,
+for example because another library's log callback blocks,
+the handler aborts the process, so that the exit can't hang.
+A crash report for this abort shows
+`LlamaLifecycle.abortAfterExitCleanupTimeout()` in its backtrace,
+which first tries to write one line to standard error,
+but aborts whether or not the line can be written.
+If the cleanup ends just after the limit,
+the cleanup's own thread can abort first,
+without the line,
+and the backtrace shows `LlamaLifecycle.abortAfterLateExitCleanup()`.
+
+To be certain that no model is loaded when the process exits,
+wait until every call to a session that uses a `LlamaDecisionModel` returns,
+start no new calls,
+release every such session,
+and then call `LlamaDecisionModel.removeAllFromCache()`
+or `removeFromCache()` on each model.
+A session keeps its weights until it is released,
+and neither call waits for a load that is still running.
+After the handler starts, both calls still release the cache's references;
+weights that the handler freed are not freed again.
+
+To be certain that the assertion can't stop the process,
+even with a model loaded on the GPU,
+set the environment variable `GGML_METAL_NO_RESIDENCY` to any value
+before the first model loads:
+in the process's environment,
+or with `setenv("GGML_METAL_NO_RESIDENCY", "1", 1)` before the first load,
+because this package starts llama.cpp's backend at the first load.
+If another library in the process uses llama.cpp,
+set the variable before that library starts llama.cpp with `llama_backend_init`.
+The Metal backend then doesn't use residency sets,
+so the assertion has nothing to count.
+Residency sets keep a model's Metal buffers wired for a keep-alive period;
+without them, the OS can reclaim that memory while the GPU is idle,
+and the next decision waits for it again.
+This package doesn't set the variable.
+A decision that is still running at exit can still crash.
+
+`LlamaDecisionModel.logLevel` sets the minimum level of the llama.cpp messages
+that are written to standard error, and you can set it at any time.
+The model installs its log callback once, before its first call to llama.cpp.
+If AnyLanguageModel's `LlamaLanguageModel` or AnyEmbeddingModel's `LlamaEmbeddingModel`
+runs in the same process,
+each package installs its own callback and its own exit handler.
+llama.cpp keeps one callback for the process,
+so the callback that was installed last decides which messages appear,
+and the other packages' log levels have no effect.
+Each exit handler waits only for its own package's work
+and frees only its own package's models,
+so an exit can wait up to three seconds for each package,
+and a model that another package still has on the GPU can still cause the assertion.
+
 ### Jev
 
 `JevDecisionModel` sends each batch to `POST /v1/systemone`.

@@ -58,17 +58,24 @@ final class ModelCache<Value: Sendable>: Sendable {
     ///
     /// Callers that already hold the value keep it.
     func remove(_ key: String) {
-        storage.withLock { storage in
-            storage.entries[key] = nil
+        let removed = storage.withLock { storage in
             _ = storage.loaded.remove(key)
+            return storage.entries.removeValue(forKey: key)
         }
+        // Release the value after the lock,
+        // because its deinit can call into a native library,
+        // which can call back into this process.
+        _ = removed
     }
 
     /// Removes every value.
     func removeAll() {
-        storage.withLock { storage in
-            storage.entries.removeAll()
+        let removed = storage.withLock { storage in
             storage.loaded.removeAll()
+            defer { storage.entries.removeAll() }
+            return storage.entries
         }
+        // Release the values after the lock, as in `remove(_:)`.
+        _ = removed
     }
 }
