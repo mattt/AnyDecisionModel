@@ -44,6 +44,11 @@ description = "Run the library tests with MLX decision head integration tests (d
 env = { ENABLE_MLX_HEAD_TESTS = "1" }
 run = "mise run _swift:mlx -- test --traits MLX"
 
+[tasks."test:mlx:d1"]
+description = "Run the library tests with Liquid AI d1 integration tests (downloads d1-3B 8-bit, 3.7 GB)"
+env = { ENABLE_MLX_D1_TESTS = "1" }
+run = "mise run _swift:mlx -- test --traits MLX"
+
 [tasks."test:coreai"]
 description = "Run the library tests with Core AI integration tests (downloads Qwen3 0.6B)"
 env = { ENABLE_COREAI_TESTS = "1" }

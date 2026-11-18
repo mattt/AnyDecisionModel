@@ -220,29 +220,15 @@ import Foundation
         private static func loadBackbone(from directory: URL, excluding excluded: Set<String>) async throws
             -> ModelContainer
         {
-            let backboneDirectory = try linkedDirectory(to: directory, excluding: excluded)
+            let backboneDirectory = try makeLinkedDirectory(to: directory, excluding: excluded)
             defer { try? FileManager.default.removeItem(at: backboneDirectory) }
-            return try await loadModelContainer(from: backboneDirectory, using: LenientTokenizerLoader())
-        }
-
-        /// Creates a temporary directory with a symbolic link to each file in a directory.
-        private static func linkedDirectory(to directory: URL, excluding excluded: Set<String>) throws -> URL {
-            let fileManager = FileManager.default
-            let linked = fileManager.temporaryDirectory
-                .appendingPathComponent("AnyDecisionModel-\(UUID().uuidString)", isDirectory: true)
-            try fileManager.createDirectory(at: linked, withIntermediateDirectories: true)
-            do {
-                for name in try fileManager.contentsOfDirectory(atPath: directory.path) where !excluded.contains(name) {
-                    try fileManager.createSymbolicLink(
-                        at: linked.appendingPathComponent(name),
-                        withDestinationURL: directory.appendingPathComponent(name)
-                    )
-                }
-            } catch {
-                try? fileManager.removeItem(at: linked)
-                throw error
-            }
-            return linked
+            // The package also links MLXVLM, and `loadModelContainer` tries it first.
+            // MLXVLM registers vision models for some backbone types, such as Clef's `qwen3_5`,
+            // so the backbone loads through MLXLLM explicitly.
+            return try await LLMModelFactory.shared.loadContainer(
+                from: backboneDirectory,
+                using: LenientTokenizerLoader()
+            )
         }
 
         /// Replaces the backbone's output projection with an identity,

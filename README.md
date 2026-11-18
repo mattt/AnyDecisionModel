@@ -59,6 +59,7 @@ and is the only backend that reads images, audio, video, and documents.
 **Next-token scoring** runs a small language model on the device
 and reads each decision from the next-token probabilities of the allowed answers.
 [MLX](#mlx) does this on Apple silicon,
+also with Liquid AI's [d1](#liquid-ai-d1) decision model,
 [Core AI](#core-ai) with a Core AI model on macOS 27 and iOS 27,
 and [llama.cpp](#llamacpp) with a GGUF model.
 
@@ -252,6 +253,87 @@ When it loads a model, it converts the half-precision parameters to float32,
 so that prefix caching and batching don't change the rounding of results.
 This makes Qwen3 4B 4-bit 11% larger
 and doubles the size of an unquantized half-precision model.
+
+#### Liquid AI d1
+
+`MLXDecisionModel` also runs Liquid AI's
+[d1-3B](https://huggingface.co/LiquidAI/d1-3B) decision model,
+which is built on LFM2-VL
+and reads answers from next-token probabilities with its own prompt:
+
+```swift
+let model = MLXDecisionModel(modelID: "LiquidAI/d1-3B-MLX-8bit")
+```
+
+[`LiquidAI/d1-3B-MLX-8bit`](https://huggingface.co/LiquidAI/d1-3B-MLX-8bit)
+is a 3.72 GB download.
+The model reads `config.json` when it loads,
+and uses d1's prompt and readout
+when `model_type` is `lfm2_vl` and `auto_map.AutoModel` ends in `.D1Model`,
+as mlx-vlm and llama.cpp do.
+Pass `promptFormat: .d1LFM2` to use them for a model without that entry,
+or `promptFormat: .standard` to use the package's prompt.
+Other models keep the package's prompt.
+A model whose `model_type` is `lfm2_vl` loads through mlx-swift-lm's `MLXVLM` library
+with or without the entry;
+every other model loads through `MLXLLM`.
+
+With the `.d1LFM2` format, the model follows `prompt.py` in the d1-3B repository:
+no system prompt,
+the state and the question in d1's own layout,
+d1's option codes,
+and for each answer the largest log-probability among its token variants,
+followed by a softmax.
+`systemPrompt` and `closedThinkFallback` don't apply.
+A JSON state can differ from what `prompt.py` writes in two ways,
+because of how `JSONValue` stores values:
+
+- d1 orders the keys of a JSON object as given,
+  but `JSONValue` objects have no key order,
+  so the model writes a JSON state with sorted keys.
+- `JSONValue` keeps every number as a `Double`,
+  so the model writes a whole number below 2^53 as an integer,
+  such as `27.0` as `27` and `-0.0` as `0`.
+  Python's JSON encoder keeps a `float` such as `27.0` as it is,
+  and writes the integer 2^53 without the `.0` that the model adds.
+
+A top-level JSON null is d1's empty state:
+the prompt has the question only, with no state and no `QUESTION:` line.
+Confidence for choices and scores is the entropy measure of the other local models,
+not d1's probability of the top answer.
+
+For nine questions over text and JSON states,
+including a choice with six options, scores with five and seven levels,
+and options without descriptions,
+the probabilities match mlx-vlm 0.8.0 on the same 8-bit weights
+within 3e-6 when mlx-vlm also computes in float32,
+and within 0.001 with mlx-vlm's float16 computation.
+The JSON states in these cases have sorted keys,
+and their whole numbers are integers,
+so the two differences above don't apply to them.
+Prefix caching gives the same answers.
+These results need swift-transformers 1.4.0 or later:
+earlier versions split some runs of newlines differently from Hugging Face's tokenizers,
+which changes d1's prompt tokens and moved one probability by 0.013.
+d1's layers don't all use plain key-value caches,
+so the model evaluates d1 prompts one at a time rather than in batches.
+
+The d1 support has these limits:
+
+- d1 reads images, but this model reads text and JSON states only.
+  A state with attachments throws `DecisionError.unsupportedState`.
+- `prompt.py` codes choices with more than 26 options as 00, 01, and so on.
+  The model allows at most 26 options, so it doesn't use those codes.
+- d1's question types are `noul`, `choice`, and `score`,
+  which match binary, choice, and score questions.
+  `prompt.py` also writes a state of images alone, with no text,
+  which this model can't send.
+- The model loads d1 through mlx-swift-lm's `MLXVLM` library,
+  so the vision tower stays in memory, unused.
+- Only the 8-bit export was tested.
+- Liquid AI's d1 models on LFM3, such as d1-2B and d1-Omni-2B,
+  use a different prompt and readout, which `.d1LFM2` doesn't follow,
+  and `.automatic` doesn't select it for them.
 
 ### MLX decision heads
 
@@ -719,12 +801,14 @@ The repository uses [mise](https://mise.jdx.dev/) tasks:
 | `mise run test` | Run the tests without MLX. |
 | `mise run test:mlx` | Run the MLX integration tests. Downloads Qwen3 4B. |
 | `mise run test:mlx:head` | Run the MLX decision head integration tests. Downloads Clef-flash 4-bit. |
+| `mise run test:mlx:d1` | Run the Liquid AI d1 integration tests. Downloads d1-3B 8-bit. |
 | `mise run test:coreai` | Run the Core AI integration tests. Downloads Qwen3 0.6B. |
 | `mise run test:llama` | Run the tests with the Llama trait. Set `LLAMA_MODEL_PATH` to a GGUF file for inference tests. |
 
 MLX tasks need Xcode's Swift 6.4 or later and the Metal compiler.
 Core AI tasks need Xcode 27, and their integration tests run only on macOS 27.
-Set `MLX_HEAD_MODEL_DIRECTORY` or `COREAI_MODEL_BUNDLE` to test a model from a local directory.
+Set `MLX_HEAD_MODEL_DIRECTORY`, `MLX_D1_MODEL_DIRECTORY`, or `COREAI_MODEL_BUNDLE`
+to test a model from a local directory.
 
 ## Related projects
 
