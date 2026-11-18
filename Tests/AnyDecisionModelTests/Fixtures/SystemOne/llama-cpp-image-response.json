@@ -1,0 +1,1 @@
+{"model":"LiquidAI/d1-Omni-2B-GGUF:Q8_0","answers":{"0":{"type":"noul","noul":0.9365451169408922},"1":{"type":"choice","choice":"circle","probabilities":{"circle":0.9717115522001465,"square":0.01730959556979208,"triangle":0.010978852230061429},"confidence":0.9717115522001465}},"usage":{"input_tokens":210,"output_tokens":0}}

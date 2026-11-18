@@ -122,8 +122,10 @@ A `DecisionSession` holds one immutable state,
 which can be text, JSON, or a list of segments of text and attachments.
 Attachments are images, audio, video, and documents,
 from data or a URL, each with a MIME type.
-Only the Gemini backend reads attachments;
-the other backends throw `DecisionError.unsupportedState` for a state with attachments,
+The Gemini backend reads attachments of every kind,
+and the System One backend can send images
+if you set its [image encoding](#images).
+The other backends throw `DecisionError.unsupportedState` for a state with attachments,
 and a session throws that error before the model does any work.
 Every question is about that state, and questions are independent:
 an answer never becomes input to a later question.
@@ -473,7 +475,7 @@ let model = try SystemOneDecisionModel(
 
 The model sends the API key, if any, as a bearer token.
 The session checks each batch against `capabilities` before it sends a request.
-`extraBody` cannot set `model`, `state`, or `questions`,
+`extraBody` cannot set `model`, `state`, `questions`, or `images`,
 and `headers` cannot set `Authorization` or `Content-Type`;
 the initializer throws `SystemOneDecisionModel.ConfigurationError`,
 which names the key, if they do.
@@ -501,7 +503,6 @@ so put a field that belongs to one server, such as provider routing, on the mode
 `JevDecisionModel` and `OllamaDecisionModel` have no custom options
 and ignore the options for `SystemOneDecisionModel`.
 The model retries like the Jev model; pass `retryPolicy: .never` to disable retries.
-It sends text and JSON states only.
 
 `SystemOneDecisionModel.jev(…)` and `SystemOneDecisionModel.ollama(…)`
 return models with the same configuration as `JevDecisionModel` and `OllamaDecisionModel`:
@@ -510,6 +511,63 @@ return models with the same configuration as `JevDecisionModel` and `OllamaDecis
 let jev = SystemOneDecisionModel.jev()
 let ollama = SystemOneDecisionModel.ollama(modelID: "nimble", keepAlive: 300)
 ```
+
+#### Images
+
+By default, `SystemOneDecisionModel` sends text and JSON states only,
+and a session rejects a state with attachments before it sends a request.
+To send images, set `imageEncoding`.
+The model then sends the images of a segments state
+in a top-level `images` array, in segment order,
+and sends the text segments, joined by newlines, as the state.
+Empty text segments are left out of a state with images;
+a state of text segments only keeps them.
+The servers differ in the form of each image:
+
+- `.dataURL` sends a data URL, such as `data:image/jpeg;base64,/9j/4AAQ…`.
+  llama.cpp's `llama-server` and Liquid's API document this form.
+- `.base64` sends a base64-encoded string with no prefix, such as `/9j/4AAQ…`.
+  Ollama documents this form.
+
+For example, this model asks a local `llama-server` about a picture:
+
+```swift
+// llama-server -hf LiquidAI/d1-Omni-2B-GGUF:Q8_0 -b 8192 -ub 8192
+let model = try SystemOneDecisionModel(
+    baseURL: URL(string: "http://127.0.0.1:9931")!,
+    modelID: "LiquidAI/d1-Omni-2B-GGUF:Q8_0",
+    imageEncoding: .dataURL
+)
+let state = DecisionState.segments([
+    .text("A photo from a customer's damage claim:"),
+    .attachment(DecisionState.Attachment(imageData: jpeg, mimeType: "image/jpeg")),
+])
+let session = DecisionSession(model: model, state: state)
+let damaged = try await session.probability(of: "Is the item damaged?")
+```
+
+This configuration was checked by hand with llama.cpp 1.0.0 and that model,
+with one JPEG image, a yes-or-no question, and a choice question.
+Images have not been run against Liquid's API or Ollama.
+llama.cpp places every image before the state in the prompt,
+and returns HTTP status 501 if the model or its projector does not read images;
+the model throws `DecisionError.requestFailed` for that response.
+
+A model with an image encoding declares `.image` in `capabilities.supportedAttachmentKinds`,
+and a model without one declares no attachment kinds,
+whatever kinds the `capabilities` argument lists.
+The session rejects audio, video, and document attachments before it sends a request,
+and the model rejects an image with a URL source or with no data,
+because these servers read image bytes only.
+The model checks typed attachments only.
+Fields that a caller adds in `extraBody` or inside a JSON state,
+such as llama.cpp's `files` or image parts in chat messages,
+go to the server unchecked.
+The model does not send TypeSafe's `assets` form of images,
+audio or video, or images in question instructions,
+and it does not ask `box` questions.
+`JevDecisionModel`, `OllamaDecisionModel`,
+`SystemOneDecisionModel.jev(…)`, and `SystemOneDecisionModel.ollama(…)` send no image attachments.
 
 ### Gemini
 

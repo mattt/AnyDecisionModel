@@ -218,7 +218,7 @@ struct SystemOneDecisionModelTests {
         #expect(SystemOneDecisionModel.reservedHeader(in: ["CONTENT-TYPE": "x"]) == "CONTENT-TYPE")
     }
 
-    @Test(arguments: ["model", "state", "questions"])
+    @Test(arguments: ["model", "state", "questions", "images"])
     func initializerThrowsForReservedBodyField(key: String) {
         #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: key)) {
             _ = try SystemOneDecisionModel(
@@ -786,7 +786,7 @@ extension SystemOneDecisionModelTests {
         #expect(traces.map(\.value) == ["request"])
     }
 
-    @Test(arguments: ["model", "state", "questions"])
+    @Test(arguments: ["model", "state", "questions", "images"])
     func requestOptionsRejectReservedBodyFieldBeforeRequest(key: String) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(json: okResponse)
@@ -860,5 +860,309 @@ extension SystemOneDecisionModelTests {
             #expect(withOptions.body == plain.body)
             #expect(withOptions.headers == plain.headers)
         }
+    }
+}
+
+// MARK: - Images
+
+/// The bytes of a JPEG image's start marker, which encode as `/9j/`.
+private let jpeg = Data([0xFF, 0xD8, 0xFF])
+
+/// The bytes of a PNG image's signature, which encode as `iVBORw==`.
+private let png = Data([0x89, 0x50, 0x4E, 0x47])
+
+private func makeImageModel(
+    _ host: StubURLProtocol.Host,
+    imageEncoding: SystemOneDecisionModel.ImageEncoding?,
+    capabilities: DecisionCapabilities = DecisionCapabilities(),
+    extraBody: [String: JSONValue] = [:]
+) throws -> SystemOneDecisionModel {
+    try SystemOneDecisionModel(
+        baseURL: host.baseURL,
+        modelID: "my-model",
+        capabilities: capabilities,
+        imageEncoding: imageEncoding,
+        extraBody: extraBody,
+        session: StubURLProtocol.makeSession(),
+        retryPolicy: .never
+    )
+}
+
+@Suite("SystemOneDecisionModel images")
+struct SystemOneDecisionModelImageTests {
+    static let photoState = DecisionState.segments([
+        .text("A photo from a customer's damage claim:"),
+        .attachment(DecisionState.Attachment(imageData: jpeg, mimeType: "image/jpeg")),
+    ])
+
+    @Test func sendsDataURLImages() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(
+            model: try makeImageModel(host, imageEncoding: .dataURL),
+            state: Self.photoState
+        )
+
+        _ = try await session.probability(of: "Is the item damaged?")
+
+        let recorded = try #require(host.recorded.first)
+        let body = try #require(String(data: recorded.body, encoding: .utf8))
+        #expect(
+            body == #"{"images":["data:image\/jpeg;base64,\/9j\/"],"model":"my-model","#
+                + #""questions":{"0":{"instructions":"Is the item damaged?","type":"noul"}},"#
+                + #""state":"A photo from a customer's damage claim:"}"#
+        )
+    }
+
+    @Test func sendsBase64Images() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(
+            model: try makeImageModel(host, imageEncoding: .base64),
+            state: Self.photoState
+        )
+
+        _ = try await session.probability(of: "Is the item damaged?")
+
+        let body = try requestBody(try #require(host.recorded.first))
+        #expect(body["images"] as? [String] == ["/9j/"])
+        #expect(body["state"] as? String == "A photo from a customer's damage claim:")
+    }
+
+    @Test(arguments: [SystemOneDecisionModel.ImageEncoding.dataURL, .base64])
+    func sendsSeveralImagesInSegmentOrder(encoding: SystemOneDecisionModel.ImageEncoding) async throws {
+        let state = DecisionState.segments([
+            .attachment(DecisionState.Attachment(imageData: png, mimeType: "image/png")),
+            .text("Before:"),
+            .text(""),
+            .text("the box on arrival."),
+            .attachment(DecisionState.Attachment(imageData: jpeg, mimeType: "image/jpeg")),
+            .text("After: the box a day later."),
+            .attachment(DecisionState.Attachment(imageData: png, mimeType: "image/png")),
+        ])
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: okResponse)
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: encoding), state: state)
+
+        _ = try await session.probability(of: "Did the box get wetter?")
+
+        let body = try requestBody(try #require(host.recorded.first))
+        switch encoding {
+        case .dataURL:
+            #expect(
+                body["images"] as? [String] == [
+                    "data:image/png;base64,iVBORw==",
+                    "data:image/jpeg;base64,/9j/",
+                    "data:image/png;base64,iVBORw==",
+                ]
+            )
+        default:
+            #expect(body["images"] as? [String] == ["iVBORw==", "/9j/", "iVBORw=="])
+        }
+        // Text segments are joined by newlines, without empty segments,
+        // as GeminiDecisionModel joins adjacent text segments.
+        #expect(body["state"] as? String == "Before:\nthe box on arrival.\nAfter: the box a day later.")
+    }
+
+    @Test(arguments: [SystemOneDecisionModel.ImageEncoding.dataURL, .base64])
+    func sendsStatesWithoutImagesUnchanged(encoding: SystemOneDecisionModel.ImageEncoding) async throws {
+        let states: [DecisionState] = [
+            "ticket",
+            .json(["id": 7]),
+            .segments([.text("A"), .text(""), .text("B")]),
+        ]
+        for state in states {
+            let questions: [Question] = [.binary(instructions: "Is this urgent?")]
+            let plain = try await record(questions, about: state) { try! makeImageModel($0, imageEncoding: nil) }
+            let withImages = try await record(questions, about: state) {
+                try! makeImageModel($0, imageEncoding: encoding)
+            }
+            #expect(withImages.body == plain.body)
+        }
+    }
+
+    @Test func defaultRejectsImagesBeforeRequest() async throws {
+        let host = StubURLProtocol.Host()
+        let model = try makeImageModel(host, imageEncoding: nil)
+        #expect(model.imageEncoding == nil)
+        #expect(model.capabilities.supportedAttachmentKinds.isEmpty)
+        let session = DecisionSession(model: model, state: Self.photoState)
+
+        await #expect(
+            throws: DecisionError.unsupportedState("SystemOneDecisionModel does not support image attachments.")
+        ) {
+            _ = try await session.probability(of: "Is the item damaged?")
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test(arguments: [SystemOneDecisionModel.ImageEncoding.dataURL, .base64])
+    func capabilitiesFollowImageEncoding(encoding: SystemOneDecisionModel.ImageEncoding) throws {
+        let host = StubURLProtocol.Host()
+        let declared = DecisionCapabilities(
+            maximumQuestions: 8,
+            supportedAttachmentKinds: Set(DecisionState.Attachment.Kind.allCases),
+            maximumAttachments: 2
+        )
+        let sending = try makeImageModel(host, imageEncoding: encoding, capabilities: declared)
+        #expect(sending.imageEncoding == encoding)
+        #expect(sending.capabilities.supportedAttachmentKinds == [.image])
+        #expect(sending.capabilities.maximumQuestions == 8)
+        #expect(sending.capabilities.maximumAttachments == 2)
+
+        let silent = try makeImageModel(host, imageEncoding: nil, capabilities: declared)
+        #expect(silent.capabilities.supportedAttachmentKinds.isEmpty)
+    }
+
+    @Test(arguments: [DecisionState.Attachment.Kind.audio, .video, .document])
+    func rejectsOtherAttachmentKindsBeforeRequest(kind: DecisionState.Attachment.Kind) async throws {
+        let host = StubURLProtocol.Host()
+        let state = DecisionState.segments([
+            .text("Listen."),
+            .attachment(
+                DecisionState.Attachment(kind: kind, source: .data(jpeg, mimeType: "application/octet-stream"))
+            ),
+        ])
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: state)
+
+        await #expect(
+            throws: DecisionError.unsupportedState(
+                "SystemOneDecisionModel does not support \(kind.rawValue) attachments."
+            )
+        ) {
+            _ = try await session.probability(of: "Is this urgent?")
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func rejectsImageURLBeforeRequest() async throws {
+        let host = StubURLProtocol.Host()
+        let state = DecisionState.segments([
+            .attachment(
+                DecisionState.Attachment(imageURL: URL(string: "https://example.com/a.jpg")!, mimeType: "image/jpeg")
+            )
+        ])
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: state)
+
+        await #expect(
+            throws: DecisionError.unsupportedState(
+                "SystemOneDecisionModel does not send attachment URLs. Pass the image bytes as data."
+            )
+        ) {
+            _ = try await session.probability(of: "Is the item damaged?")
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func rejectsEmptyImageBeforeRequest() async throws {
+        let host = StubURLProtocol.Host()
+        let state = DecisionState.segments([
+            .attachment(DecisionState.Attachment(imageData: Data(), mimeType: "image/jpeg"))
+        ])
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .base64), state: state)
+
+        await #expect(
+            throws: DecisionError.unsupportedState("SystemOneDecisionModel does not send an empty image attachment.")
+        ) {
+            _ = try await session.probability(of: "Is the item damaged?")
+        }
+        #expect(host.recorded.isEmpty)
+    }
+
+    @Test func reportsServerWithoutImageSupport() async throws {
+        // llama.cpp returns 501 when the model or its projector does not read images.
+        let host = StubURLProtocol.Host()
+        host.enqueue(
+            json:
+                #"{"error": {"code": 501, "message": "image input is not supported", "type": "not_supported_error"}}"#,
+            statusCode: 501
+        )
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: Self.photoState)
+
+        do {
+            _ = try await session.probability(of: "Is the item damaged?")
+            Issue.record("Expected the request to fail.")
+        } catch let DecisionError.requestFailed(statusCode, detail, _) {
+            #expect(statusCode == 501)
+            #expect(detail.contains("image input is not supported"))
+        }
+        #expect(host.recorded.count == 1)
+    }
+
+    @Test func extraBodyCannotSetImages() async throws {
+        let host = StubURLProtocol.Host()
+        #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: "images")) {
+            _ = try makeImageModel(host, imageEncoding: .dataURL, extraBody: ["images": ["data:,"]])
+        }
+
+        host.enqueue(json: okResponse)
+        var options = DecisionOptions()
+        options[custom: SystemOneDecisionModel.self] = .init(extraBody: ["images": ["data:,"]])
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: "ticket")
+        await #expect(throws: SystemOneDecisionModel.ConfigurationError(kind: .reservedBodyField, key: "images")) {
+            _ = try await session.probability(of: "Is this urgent?", options: options)
+        }
+        #expect(host.recorded.isEmpty)
+
+        // The encoder also skips the field, so that no path can replace the images.
+        let request = SystemOneRequest(
+            model: "my-model",
+            state: Self.photoState,
+            questions: ["0": SystemOneQuestion(.binary(instructions: "Q?"))],
+            imageEncoding: .base64,
+            extraBody: ["images": ["other"]]
+        )
+        let body = try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+        #expect(body["images"] as? [String] == ["/9j/"])
+    }
+
+    /// Decodes a response that llama.cpp's `llama-server` 1.0.0 returned
+    /// for a picture of a red circle sent as a data URL,
+    /// with `LiquidAI/d1-Omni-2B-GGUF:Q8_0`.
+    @Test func decodesLlamaCppImageResponse() async throws {
+        let url = try #require(
+            Bundle.module.url(
+                forResource: "llama-cpp-image-response",
+                withExtension: "json",
+                subdirectory: "Fixtures/SystemOne"
+            )
+        )
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: String(decoding: try Data(contentsOf: url), as: UTF8.self))
+        let session = DecisionSession(model: try makeImageModel(host, imageEncoding: .dataURL), state: Self.photoState)
+
+        let response = try await session.decide([
+            .binary(instructions: "Is the shape in the picture red?"),
+            .choice(
+                instructions: "What shape is in the picture?",
+                options: [ChoiceOption("circle"), ChoiceOption("square"), ChoiceOption("triangle")]
+            ),
+        ])
+
+        #expect(response.modelID == "LiquidAI/d1-Omni-2B-GGUF:Q8_0")
+        #expect(
+            response.answers == [
+                .binary(probability: 0.9365451169408922),
+                .choice(
+                    name: "circle",
+                    probabilities: [
+                        "circle": 0.9717115522001465,
+                        "square": 0.01730959556979208,
+                        "triangle": 0.010978852230061429,
+                    ],
+                    confidence: 0.9717115522001465
+                ),
+            ]
+        )
+        #expect(response.usage == DecisionSession.Usage(inputTokenCount: 210, outputTokenCount: 0))
+    }
+
+    @Test func jevAndOllamaSendNoImages() {
+        #expect(SystemOneDecisionModel.jev(apiKey: "key").imageEncoding == nil)
+        #expect(SystemOneDecisionModel.ollama(modelID: "nimble", apiKey: nil).imageEncoding == nil)
+        #expect(JevDecisionModel(apiKey: "key").capabilities.supportedAttachmentKinds.isEmpty)
+        #expect(OllamaDecisionModel(modelID: "nimble", apiKey: nil).capabilities.supportedAttachmentKinds.isEmpty)
     }
 }
