@@ -156,6 +156,30 @@ struct D1LFM2PromptTests {
         #expect(D1LFM2Prompt.optionCodes(for: many).last == "26")
     }
 
+    /// Builds `prompt.py`'s `_FALLBACK_POOL` with plain loops.
+    @Test func fallbackCodesMatchTheReferencePool() {
+        var expected: [String] = []
+        for scalar in UnicodeScalar("A").value ... UnicodeScalar("Z").value {
+            expected.append(String(UnicodeScalar(scalar)!))
+        }
+        for number in 0 ..< 100 {
+            expected.append(String(format: "%02d", number))
+        }
+        for scalar in UnicodeScalar("a").value ... UnicodeScalar("z").value {
+            expected.append(String(UnicodeScalar(scalar)!))
+        }
+        for number in 0 ..< 200 {
+            expected.append("#\(number)")
+        }
+        for first in UnicodeScalar("A").value ... UnicodeScalar("Z").value {
+            for second in UnicodeScalar("A").value ... UnicodeScalar("Z").value {
+                expected.append(String(UnicodeScalar(first)!) + String(UnicodeScalar(second)!))
+            }
+        }
+        #expect(expected.count == 1_028)
+        #expect(D1LFM2Prompt.fallbackCodes == expected)
+    }
+
     @Test func aliasesFallBackWhenACodeIsNotOneTokenOrIsTaken() throws {
         // "A" is several tokens, and "b" and "B" share a token.
         let encode: (String) -> [Int] = { text in

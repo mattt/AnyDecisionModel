@@ -34,16 +34,23 @@ enum D1LFM2Prompt {
     ///
     /// Capital letters, then the numbers 00 to 99, then small letters,
     /// then `#0` to `#199`, then every pair of capital letters.
-    static let fallbackCodes: [String] =
-        (UnicodeScalar("A").value ... UnicodeScalar("Z").value).map { String(UnicodeScalar($0)!) }
-        + (0 ..< 100).map(twoDigitCode)
-        + (UnicodeScalar("a").value ... UnicodeScalar("z").value).map { String(UnicodeScalar($0)!) }
-        + (0 ..< 200).map { "#\($0)" }
-        + (UnicodeScalar("A").value ... UnicodeScalar("Z").value).flatMap { first in
-            (UnicodeScalar("A").value ... UnicodeScalar("Z").value).map { second in
-                String(UnicodeScalar(first)!) + String(UnicodeScalar(second)!)
-            }
-        }
+    static let fallbackCodes: [String] = {
+        // Swift 6.2 can't type-check these parts as one chained expression in reasonable time,
+        // so each part has its own type.
+        let capitals: [String] = letters(from: "A", through: "Z")
+        let numbers: [String] = (0 ..< 100).map(twoDigitCode)
+        let smallLetters: [String] = letters(from: "a", through: "z")
+        let hashes: [String] = (0 ..< 200).map { "#\($0)" }
+        let pairs: [String] = capitals.flatMap { first in capitals.map { second in first + second } }
+
+        var codes: [String] = []
+        codes.append(contentsOf: capitals)
+        codes.append(contentsOf: numbers)
+        codes.append(contentsOf: smallLetters)
+        codes.append(contentsOf: hashes)
+        codes.append(contentsOf: pairs)
+        return codes
+    }()
 
     /// A question as d1 reads it:
     /// the text between the state and the end of the user turn,
@@ -271,6 +278,11 @@ enum D1LFM2Prompt {
         return ids
     }
 
+    /// Returns each letter from one Unicode scalar through another, in order.
+    private static func letters(from first: UnicodeScalar, through last: UnicodeScalar) -> [String] {
+        (first.value ... last.value).compactMap { UnicodeScalar($0).map(String.init) }
+    }
+
     private static func twoDigitCode(_ number: Int) -> String {
         number < 10 ? "0\(number)" : String(number)
     }
@@ -392,21 +404,29 @@ enum D1LFM2Prompt {
             digits.removeLast()
         }
 
-        let sign = value < 0 ? "-" : ""
+        // Each layout is interpolated from typed parts,
+        // because Swift 6.2 is slow to type-check long chains of `+`.
+        let sign: String = value < 0 ? "-" : ""
         if -4 < decimalPoint, decimalPoint <= 16 {
             if decimalPoint <= 0 {
-                return sign + "0." + String(repeating: "0", count: -decimalPoint) + digits
+                let zeros = String(repeating: "0", count: -decimalPoint)
+                return "\(sign)0.\(zeros)\(digits)"
             }
             if decimalPoint >= digits.count {
-                return sign + digits + String(repeating: "0", count: decimalPoint - digits.count) + ".0"
+                let zeros = String(repeating: "0", count: decimalPoint - digits.count)
+                return "\(sign)\(digits)\(zeros).0"
             }
             let split = digits.index(digits.startIndex, offsetBy: decimalPoint)
-            return sign + digits[..<split] + "." + digits[split...]
+            let integerPart = String(digits[..<split])
+            let fractionPart = String(digits[split...])
+            return "\(sign)\(integerPart).\(fractionPart)"
         }
-        let fraction = digits.dropFirst()
+        let leadingDigit = String(digits.first!)
+        let fraction = String(digits.dropFirst())
+        let fractionText: String = fraction.isEmpty ? "" : ".\(fraction)"
         let power = decimalPoint - 1
-        let powerText = abs(power) < 10 ? "0\(abs(power))" : String(abs(power))
-        return sign + String(digits.first!) + (fraction.isEmpty ? "" : "." + fraction) + "e"
-            + (power < 0 ? "-" : "+") + powerText
+        let powerSign: String = power < 0 ? "-" : "+"
+        let powerText: String = abs(power) < 10 ? "0\(abs(power))" : String(abs(power))
+        return "\(sign)\(leadingDigit)\(fractionText)e\(powerSign)\(powerText)"
     }
 }
