@@ -63,6 +63,10 @@ public struct DecisionCapabilities: Hashable, Sendable {
     public var maximumQuestions: Int?
 
     /// The largest number of options in a choice question, or `nil` for no local limit.
+    ///
+    /// A ``DecisionSession`` rejects a choice with fewer than two options,
+    /// so with a value less than 2, a session rejects every choice question.
+    /// ``validate(_:about:)`` checks only this limit, not the minimum.
     public var maximumChoiceOptions: Int?
 
     /// The largest number of levels in a score question, or `nil` for no local limit.

@@ -528,7 +528,7 @@ import Foundation
             let plans = try questions.enumerated().map { index, question -> Plan in
                 let labels = TokenScoring.labels(for: question)
                 var rotations = [Array(labels.indices)]
-                if model.rotationDebiasing, case .choice = question, labels.count > 1 {
+                if model.rotationDebiasing, case .choice = question {
                     rotations = labels.indices.map { r in
                         Array(labels.indices[r...]) + Array(labels.indices[..<r])
                     }

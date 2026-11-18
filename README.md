@@ -138,6 +138,8 @@ Call `prewarm()` to load the model and process the state before the first questi
 
 To get a choice back as one of your own types, conform an enumeration to `Choosable`.
 The cases become the options, in declaration order.
+A choice needs at least two options with unique, non-empty names,
+so the enumeration needs at least two cases.
 `String` raw values become the option names;
 other types implement `optionName`.
 Implement `optionDescription` to tell the model when to select each option:
@@ -164,6 +166,14 @@ team.distribution             // Every option with its probability
 
 When the options are known only at run time,
 pass an array of `ChoiceOption` values instead and get a `Choice<String>` back.
+
+A choice with fewer than two options decides nothing,
+so a session throws `DecisionError.invalidQuestion` for it
+before the model does any work.
+A score also needs at least two levels.
+Version 0.10 and earlier accepted a choice with one option.
+To migrate, remove a question that has only one possible answer,
+or add the alternatives that the model should consider.
 
 ### Batches
 

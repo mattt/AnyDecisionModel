@@ -200,6 +200,7 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - type: The option type. It defaults to the inferred result type.
+    ///     It needs at least two cases.
     public func choice<Option: Choosable>(
         _ instructions: String,
         from type: Option.Type = Option.self
@@ -212,6 +213,7 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - type: The option type. It defaults to the inferred result type.
+    ///     It needs at least two cases.
     ///   - options: The options for this request.
     ///     They replace the session's ``options``; the two are not merged.
     @_disfavoredOverload
@@ -234,6 +236,7 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - choiceOptions: The options to choose from, in display order.
+    ///     A choice needs at least two options.
     public func choice(_ instructions: String, from choiceOptions: [ChoiceOption]) async throws -> Choice<String> {
         try await choice(instructions, from: choiceOptions, options: options)
     }
@@ -243,6 +246,7 @@ public final class DecisionSession: Sendable {
     /// - Parameters:
     ///   - instructions: The question.
     ///   - choiceOptions: The options to choose from, in display order.
+    ///     A choice needs at least two options.
     ///   - options: The options for this request.
     ///     They replace the session's ``options``; the two are not merged.
     @_disfavoredOverload

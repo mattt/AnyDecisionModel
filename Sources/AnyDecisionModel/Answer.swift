@@ -55,8 +55,8 @@ extension Answer {
     /// For example, 0.03 + 0.83 + 0.15 = 1.01
     /// is a two-decimal rounding of a distribution with 3 values.
     ///
-    /// The tolerance is at least 0.01, the same as ``valueTolerance``,
-    /// so a choice with one option can still sum to 1.01.
+    /// A choice or score has at least two values,
+    /// so the tolerance is at least 0.01, the same as ``valueTolerance``.
     /// The tolerance is at most 0.15, which covers two-decimal rounding of up to 30 values.
     /// Remote backends have no limit on the number of options or levels,
     /// and without this bound, a total of 0.5 would pass for 100 values.
@@ -69,7 +69,7 @@ extension Answer {
     ///
     /// - Parameter count: The number of options or levels.
     static func totalTolerance(count: Int) -> Double {
-        min(Double(max(count, 2)) * 0.005, 0.15) + 1e-9
+        min(Double(count) * 0.005, 0.15) + 1e-9
     }
 
     func validate(for question: Question, index: Int) throws {

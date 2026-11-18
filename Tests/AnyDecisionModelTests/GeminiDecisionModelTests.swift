@@ -473,12 +473,23 @@ struct GeminiDecisionModelTests {
 
     @Test func rejectsChoiceWithOneOption() async throws {
         let host = StubURLProtocol.Host()
-        let session = DecisionSession(model: makeModel(host), state: "state")
-        do {
-            _ = try await session.decide(.choice(instructions: "x", options: [ChoiceOption("only")]))
-            Issue.record("Expected an error.")
-        } catch let error as DecisionError where error.kind == .unsupportedQuestion {
-            #expect(error.questionIndex == 0)
+        let model = makeModel(host)
+        let question = Question.choice(instructions: "x", options: [ChoiceOption("only")])
+
+        // The session rejects the question for every model.
+        let session = DecisionSession(model: model, state: "state")
+        let invalid = DecisionError.invalidQuestion(index: 0, reason: "A choice needs at least two options, not 1.")
+        #expect(invalid.questionIndex == 0)
+        await expectDecisionError(invalid) {
+            _ = try await session.decide(question)
+        }
+
+        // The executor also rejects it for callers that skip the session.
+        let executor = model.makeExecutor()
+        await expectDecisionError(
+            .unsupportedQuestion(index: 0, reason: "Gemini needs at least 2 choice options, not 1.")
+        ) {
+            _ = try await executor.decide(DecisionRequest(state: "state", questions: [question]))
         }
         #expect(host.recorded.isEmpty)
     }
