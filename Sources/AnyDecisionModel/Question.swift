@@ -10,6 +10,8 @@ public enum Question: Hashable, Sendable {
     case binary(instructions: String, criteria: BinaryCriteria? = nil)
 
     /// A question that selects one option from a set.
+    ///
+    /// A choice needs at least two options with unique, non-empty names.
     case choice(instructions: String, options: [ChoiceOption])
 
     /// A question that places the state on an ordinal scale.
@@ -40,8 +42,8 @@ public enum Question: Hashable, Sendable {
     ///
     /// - Parameter index: The position of the question in its batch, used in the error.
     /// - Throws: ``DecisionError/invalidQuestion(index:reason:)``
-    ///   if the question has no instructions, no options, duplicate option names,
-    ///   or fewer than two score levels.
+    ///   if the question has no instructions, fewer than two choice options,
+    ///   an empty or duplicate option name, or fewer than two score levels.
     func validate(index: Int) throws {
         guard !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DecisionError.invalidQuestion(index: index, reason: "The instructions are empty.")
@@ -51,8 +53,11 @@ public enum Question: Hashable, Sendable {
         case .binary:
             break
         case .choice(_, let options):
-            guard !options.isEmpty else {
-                throw DecisionError.invalidQuestion(index: index, reason: "A choice needs at least one option.")
+            guard options.count >= 2 else {
+                throw DecisionError.invalidQuestion(
+                    index: index,
+                    reason: "A choice needs at least two options, not \(options.count)."
+                )
             }
             var seen = Set<String>()
             for option in options {
@@ -170,6 +175,8 @@ public struct ChoiceOption: Hashable, Sendable {
 /// Conform an enumeration to this protocol
 /// to ask for a typed choice with ``DecisionSession/choice(_:from:)``.
 /// String-backed enumerations use their raw values as option names.
+/// The enumeration needs at least two cases,
+/// because a choice needs at least two options.
 ///
 /// ```swift
 /// enum Department: String, Choosable {

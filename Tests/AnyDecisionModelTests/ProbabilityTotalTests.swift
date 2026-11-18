@@ -248,7 +248,7 @@ struct ProbabilityTotalTests {
 
     // MARK: Boundaries
 
-    /// The allowed difference from 1 is min(max(n, 2) × 0.005, 0.15).
+    /// The allowed difference from 1 is min(n × 0.005, 0.15).
     @Test(
         arguments: DistributionKind.allCases,
         [(2, 0.01), (3, 0.015), (10, 0.05), (26, 0.13), (30, 0.15), (100, 0.15), (1000, 0.15)]
@@ -263,14 +263,6 @@ struct ProbabilityTotalTests {
             #expect(throws: Never.self, "total \(inside)") { try kind.validate(values(total: inside)) }
             #expect(throws: DecisionError.self, "total \(outside)") { try kind.validate(values(total: outside)) }
         }
-    }
-
-    /// A choice with one option keeps the tolerance of 0.01.
-    @Test func singleOptionBoundary() {
-        #expect(throws: Never.self) { try DistributionKind.choice.validate([0.99 + 1e-6]) }
-        #expect(throws: Never.self) { try DistributionKind.choice.validate([1.01 - 1e-6]) }
-        #expect(throws: DecisionError.self) { try DistributionKind.choice.validate([0.99 - 1e-6]) }
-        #expect(throws: DecisionError.self) { try DistributionKind.choice.validate([1.01 + 1e-6]) }
     }
 
     // MARK: Rejections

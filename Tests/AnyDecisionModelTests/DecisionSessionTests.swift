@@ -148,6 +148,56 @@ struct DecisionSessionTests {
         #expect(model.calls.withLock { $0.isEmpty })
     }
 
+    @Test("A choice with fewer than two options is rejected before the model runs", arguments: [0, 1])
+    func rejectsChoiceWithFewerThanTwoOptions(count: Int) async throws {
+        let session = DecisionSession(model: model, state: "ticket")
+        let choiceOptions = ["a", "b"].prefix(count).map { ChoiceOption($0) }
+
+        let reason = "A choice needs at least two options, not \(count)."
+
+        // The error names the position of the question in its batch.
+        do {
+            _ = try await session.decide([
+                .binary(instructions: "x"),
+                .choice(instructions: "x", options: choiceOptions),
+            ])
+            Issue.record("Expected an error.")
+        } catch let error as DecisionError {
+            #expect(error.kind == .invalidQuestion)
+            #expect(error.questionIndex == 1)
+            #expect(error.message == "Invalid question at index 1: \(reason)")
+        }
+        await expectDecisionError(.invalidQuestion(index: 0, reason: reason)) {
+            _ = try await session.choice("x", from: choiceOptions)
+        }
+        expectDecisionError(.invalidQuestion(index: 0, reason: reason)) {
+            try Question.choice(instructions: "x", options: choiceOptions).validate(index: 0)
+        }
+        #expect(model.calls.withLock { $0.isEmpty })
+    }
+
+    /// An enumeration with one case.
+    enum Only: String, Choosable {
+        case only
+    }
+
+    @Test func rejectsChoosableWithOneCase() async throws {
+        let session = DecisionSession(model: model, state: "ticket")
+        await expectDecisionError(
+            .invalidQuestion(index: 0, reason: "A choice needs at least two options, not 1.")
+        ) {
+            _ = try await session.choice("x", from: Only.self)
+        }
+        #expect(model.calls.withLock { $0.isEmpty })
+    }
+
+    @Test func acceptsChoiceWithTwoOptions() async throws {
+        let session = DecisionSession(model: model, state: "ticket")
+        let choice = try await session.choice("x", from: [ChoiceOption("a"), ChoiceOption("b")])
+        #expect(choice.value == "a")
+        #expect(model.calls.withLock { $0.count } == 1)
+    }
+
     @Test func rejectsQuestionsBeyondCapabilities() async throws {
         let session = DecisionSession(model: model, state: "ticket")
         let options = ["a", "b", "c", "d"].map { ChoiceOption($0) }

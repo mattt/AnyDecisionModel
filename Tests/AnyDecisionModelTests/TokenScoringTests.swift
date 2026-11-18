@@ -219,11 +219,11 @@ struct TokenScoringTests {
         )
         #expect(choice == .choice(name: "heads", probabilities: ["heads": 0.5, "tails": 0.5], confidence: 0))
 
-        let single = TokenScoring.answer(
-            for: .choice(instructions: "x", options: [ChoiceOption("only")]),
-            probabilities: [1]
+        let certain = TokenScoring.answer(
+            for: .choice(instructions: "x", options: [ChoiceOption("heads"), ChoiceOption("tails")]),
+            probabilities: [0, 1]
         )
-        #expect(single == .choice(name: "only", probabilities: ["only": 1], confidence: 1))
+        #expect(certain == .choice(name: "tails", probabilities: ["heads": 0, "tails": 1], confidence: 1))
 
         let score = TokenScoring.answer(
             for: .score(instructions: "x", levels: ["Calm", "Frustrated", "Very angry"]),

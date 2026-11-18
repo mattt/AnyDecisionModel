@@ -395,7 +395,7 @@ import Foundation
                 let labels = TokenScoring.labels(for: question)
                 let tokenMap = try TokenScoring.tokenMap(for: labels, index: index, encode: encode)
                 var rotations = [Array(labels.indices)]
-                if model.rotationDebiasing, case .choice = question, labels.count > 1 {
+                if model.rotationDebiasing, case .choice = question {
                     rotations = labels.indices.map { r in
                         Array(labels.indices[r...]) + Array(labels.indices[..<r])
                     }
