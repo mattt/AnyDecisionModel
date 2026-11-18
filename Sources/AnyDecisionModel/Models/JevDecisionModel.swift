@@ -6,10 +6,12 @@ import Foundation
 
 /// A decision model that calls the TypeSafe Jev API.
 ///
+/// - Important: This type is deprecated, and version 1.0 removes it.
+///   Use ``SystemOneDecisionModel/jev(baseURL:apiKey:modelID:session:retryPolicy:)``,
+///   which has the same configuration and behavior.
+///
 /// The model sends each batch to `POST /v1/systemone`
 /// and returns Jev's probabilities and confidence values unchanged.
-/// It has the same configuration and behavior as
-/// ``SystemOneDecisionModel/jev(baseURL:apiKey:modelID:session:retryPolicy:)``.
 ///
 /// By default, the API key comes from the `TYPESAFE_AI_API_KEY` environment variable,
 /// or from `TYPESAFE_API_KEY` if the first is not set.
@@ -17,16 +19,21 @@ import Foundation
 /// and is never included in descriptions or errors.
 ///
 /// ```swift
-/// let model = JevDecisionModel()
+/// let model = SystemOneDecisionModel.jev()
 /// let session = DecisionSession(model: model, state: .text(ticket))
 /// let urgent = try await session.probability(of: "Does this convey urgency?")
 /// ```
+@available(
+    *,
+    deprecated,
+    message: """
+        Use SystemOneDecisionModel.jev(baseURL:apiKey:modelID:session:retryPolicy:). \
+        Version 1.0 removes JevDecisionModel.
+        """
+)
 public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     /// The default API base URL.
-    public static let defaultBaseURL = URL(string: "https://api.typesafe.ai")!
-
-    /// The environment variables that supply the API key, in order of preference.
-    private static let apiKeyEnvironmentVariables = ["TYPESAFE_AI_API_KEY", "TYPESAFE_API_KEY"]
+    public static let defaultBaseURL = SystemOneDecisionModel.jevDefaultBaseURL
 
     /// The API base URL.
     public let baseURL: URL
@@ -73,12 +80,7 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     public static func environmentAPIKey(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String? {
-        for name in apiKeyEnvironmentVariables {
-            if let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-                return value
-            }
-        }
-        return nil
+        SystemOneDecisionModel.jevEnvironmentAPIKey(from: environment)
     }
 
     public var capabilities: DecisionCapabilities {
@@ -92,11 +94,12 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     public func makeExecutor() -> any DecisionModelExecutor {
         base.makeExecutor(readsCustomOptions: false)
     }
-}
 
-// MARK: - Retry policy
+    // MARK: - Retry policy
 
-extension JevDecisionModel {
+    // The compiler warns about an extension of a deprecated type,
+    // so the type declares this alias.
+
     /// Retry behavior for eligible HTTP failures.
     ///
     /// This is a type alias for the top-level ``AnyDecisionModel/RetryPolicy``.
