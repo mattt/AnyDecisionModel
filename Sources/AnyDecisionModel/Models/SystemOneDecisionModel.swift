@@ -55,9 +55,8 @@ import Foundation
 /// Set ``imageEncoding`` to send the images of a ``DecisionState/segments(_:)`` state
 /// in a top-level `images` array, in segment order,
 /// with the text segments joined by newlines as the state.
-/// Empty text segments are left out of a state with images.
-/// A state of text segments only is joined as before,
-/// with empty segments kept:
+/// Empty text segments are left out of a state with images;
+/// a state of text segments only keeps them:
 ///
 /// ```swift
 /// let model = try SystemOneDecisionModel(

@@ -439,7 +439,7 @@ The model then sends the images of a segments state
 in a top-level `images` array, in segment order,
 and sends the text segments, joined by newlines, as the state.
 Empty text segments are left out of a state with images;
-a state of text segments only is joined as before, with empty segments kept.
+a state of text segments only keeps them.
 The servers differ in the form of each image:
 
 - `.dataURL` sends a data URL, such as `data:image/jpeg;base64,/9j/4AAQ…`.
