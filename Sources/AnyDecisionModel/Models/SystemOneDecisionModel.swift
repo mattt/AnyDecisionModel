@@ -54,11 +54,14 @@ import Foundation
 /// and a state with attachments is rejected before any request is sent.
 /// Set ``imageEncoding`` to send the images of a ``DecisionState/segments(_:)`` state
 /// in a top-level `images` array, in segment order,
-/// with the text segments joined by newlines as the state:
+/// with the text segments joined by newlines as the state.
+/// Empty text segments are left out of a state with images.
+/// A state of text segments only is joined as before,
+/// with empty segments kept:
 ///
 /// ```swift
 /// let model = try SystemOneDecisionModel(
-///     baseURL: URL(string: "http://127.0.0.1:8080")!,
+///     baseURL: URL(string: "http://127.0.0.1:9931")!,
 ///     modelID: "LiquidAI/d1-Omni-2B-GGUF:Q8_0",
 ///     imageEncoding: .dataURL
 /// )
@@ -84,9 +87,9 @@ public struct SystemOneDecisionModel: DecisionModel, CustomStringConvertible {
     /// The request body fields that the model writes.
     ///
     /// ``extraBody`` and ``CustomOptions/extraBody`` cannot contain these keys.
-    /// The model writes `images` only for a state with images,
-    /// but the field is always reserved,
-    /// so that a request cannot send images that the session did not check.
+    /// The model writes `images` for a state with images,
+    /// so `extraBody` cannot replace it,
+    /// as it cannot replace `model`, `state`, or `questions`.
     public static let reservedBodyFields: Set<String> = ["model", "state", "questions", "images"]
 
     /// The request headers that the model writes.
@@ -546,7 +549,7 @@ extension SystemOneDecisionModel {
         /// and Liquid's API documents it.
         case dataURL
 
-        /// The base64 encoding of the image bytes, with no prefix,
+        /// A base64-encoded string of the image bytes, with no prefix,
         /// such as `/9j/4AAQ...`.
         ///
         /// Ollama documents this form.

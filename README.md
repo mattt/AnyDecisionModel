@@ -438,19 +438,21 @@ To send images, set `imageEncoding`.
 The model then sends the images of a segments state
 in a top-level `images` array, in segment order,
 and sends the text segments, joined by newlines, as the state.
+Empty text segments are left out of a state with images;
+a state of text segments only is joined as before, with empty segments kept.
 The servers differ in the form of each image:
 
 - `.dataURL` sends a data URL, such as `data:image/jpeg;base64,/9j/4AAQ…`.
   llama.cpp's `llama-server` and Liquid's API document this form.
-- `.base64` sends the base64 bytes with no prefix, such as `/9j/4AAQ…`.
+- `.base64` sends a base64-encoded string with no prefix, such as `/9j/4AAQ…`.
   Ollama documents this form.
 
 For example, this model asks a local `llama-server` about a picture:
 
 ```swift
-// llama-server -hf LiquidAI/d1-Omni-2B-GGUF:Q8_0 -b 8192 -ub 8192 --port 8080
+// llama-server -hf LiquidAI/d1-Omni-2B-GGUF:Q8_0 -b 8192 -ub 8192
 let model = try SystemOneDecisionModel(
-    baseURL: URL(string: "http://127.0.0.1:8080")!,
+    baseURL: URL(string: "http://127.0.0.1:9931")!,
     modelID: "LiquidAI/d1-Omni-2B-GGUF:Q8_0",
     imageEncoding: .dataURL
 )
@@ -475,11 +477,15 @@ whatever kinds the `capabilities` argument lists.
 The session rejects audio, video, and document attachments before it sends a request,
 and the model rejects an image with a URL source or with no data,
 because these servers read image bytes only.
+The model checks typed attachments only.
+Fields that a caller adds in `extraBody` or inside a JSON state,
+such as llama.cpp's `files` or image parts in chat messages,
+go to the server unchecked.
 The model does not send TypeSafe's `assets` form of images,
 audio or video, or images in question instructions,
 and it does not ask `box` questions.
 `JevDecisionModel`, `OllamaDecisionModel`,
-`SystemOneDecisionModel.jev(…)`, and `SystemOneDecisionModel.ollama(…)` send no images.
+`SystemOneDecisionModel.jev(…)`, and `SystemOneDecisionModel.ollama(…)` send no image attachments.
 
 ### Gemini
 
