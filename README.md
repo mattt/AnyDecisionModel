@@ -701,6 +701,10 @@ let ollama = SystemOneDecisionModel.ollama(modelID: "nimble", keepAlive: 300)
 
 The returned models read request options for `SystemOneDecisionModel`,
 which the deprecated types ignore.
+Version 1.0 also removes the types' `defaultBaseURL` and `environmentAPIKey(from:)`.
+To read an API key yourself,
+read `TYPESAFE_AI_API_KEY` (or `TYPESAFE_API_KEY`) for Jev
+and `OLLAMA_API_KEY` for Ollama.
 
 #### Images
 

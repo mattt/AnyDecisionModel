@@ -37,10 +37,7 @@ import Foundation
 )
 public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     /// The default base URL for a local Ollama server.
-    public static let defaultBaseURL = URL(string: "http://localhost:11434")!
-
-    /// The environment variable that supplies the API key.
-    private static let apiKeyEnvironmentVariable = "OLLAMA_API_KEY"
+    public static let defaultBaseURL = SystemOneDecisionModel.ollamaDefaultBaseURL
 
     /// The base URL for the Ollama server.
     public let baseURL: URL
@@ -95,12 +92,7 @@ public struct OllamaDecisionModel: DecisionModel, CustomStringConvertible {
     public static func environmentAPIKey(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String? {
-        guard
-            let value = environment[apiKeyEnvironmentVariable]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            !value.isEmpty
-        else { return nil }
-        return value
+        SystemOneDecisionModel.ollamaEnvironmentAPIKey(from: environment)
     }
 
     public var capabilities: DecisionCapabilities {

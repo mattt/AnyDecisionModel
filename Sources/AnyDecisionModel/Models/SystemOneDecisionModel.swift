@@ -471,8 +471,8 @@ extension SystemOneDecisionModel {
     ///   - session: The URL session for requests.
     ///   - retryPolicy: The retry behavior for eligible HTTP failures.
     public static func jev(
-        baseURL: URL = JevDecisionModel.defaultBaseURL,
-        apiKey tokenProvider: @escaping @autoclosure @Sendable () -> String? = JevDecisionModel.environmentAPIKey(),
+        baseURL: URL = jevDefaultBaseURL,
+        apiKey tokenProvider: @escaping @autoclosure @Sendable () -> String? = jevEnvironmentAPIKey(),
         modelID: String = "jev-latest",
         session: URLSession = URLSession(configuration: .default),
         retryPolicy: RetryPolicy = .default
@@ -511,8 +511,8 @@ extension SystemOneDecisionModel {
     ///   - session: The URL session for requests.
     public static func ollama(
         modelID: String,
-        baseURL: URL = OllamaDecisionModel.defaultBaseURL,
-        apiKey tokenProvider: @escaping @autoclosure @Sendable () -> String? = OllamaDecisionModel.environmentAPIKey(),
+        baseURL: URL = ollamaDefaultBaseURL,
+        apiKey tokenProvider: @escaping @autoclosure @Sendable () -> String? = ollamaEnvironmentAPIKey(),
         keepAlive: TimeInterval? = nil,
         session: URLSession = URLSession(configuration: .default)
     ) -> SystemOneDecisionModel {
@@ -532,6 +532,65 @@ extension SystemOneDecisionModel {
             session: session,
             retryPolicy: .never
         )
+    }
+}
+
+// MARK: - Configuration defaults
+
+// The default arguments of `jev(…)` and `ollama(…)` use these members,
+// so they are `@usableFromInline`.
+// Version 1.0 removes `JevDecisionModel` and `OllamaDecisionModel`,
+// whose public `defaultBaseURL` and `environmentAPIKey(from:)` forward to them.
+
+extension SystemOneDecisionModel {
+    /// The default base URL for the TypeSafe Jev API.
+    @usableFromInline
+    static let jevDefaultBaseURL = URL(string: "https://api.typesafe.ai")!
+
+    /// The environment variables that supply a Jev API key, in order of preference.
+    static let jevAPIKeyEnvironmentVariables = ["TYPESAFE_AI_API_KEY", "TYPESAFE_API_KEY"]
+
+    /// Returns the Jev API key from the environment, or `nil` if none is set.
+    ///
+    /// The first variable in ``jevAPIKeyEnvironmentVariables``
+    /// that has a value other than whitespace supplies the key,
+    /// without leading or trailing whitespace.
+    ///
+    /// - Parameter environment: The environment to read.
+    @usableFromInline
+    static func jevEnvironmentAPIKey(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        for name in jevAPIKeyEnvironmentVariables {
+            if let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    /// The default base URL for a local Ollama server.
+    @usableFromInline
+    static let ollamaDefaultBaseURL = URL(string: "http://localhost:11434")!
+
+    /// The environment variable that supplies an Ollama API key.
+    static let ollamaAPIKeyEnvironmentVariable = "OLLAMA_API_KEY"
+
+    /// Returns the Ollama API key from the environment, or `nil` if none is set.
+    ///
+    /// The key has no leading or trailing whitespace.
+    ///
+    /// - Parameter environment: The environment to read.
+    @usableFromInline
+    static func ollamaEnvironmentAPIKey(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        guard
+            let value = environment[ollamaAPIKeyEnvironmentVariable]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        else { return nil }
+        return value
     }
 }
 

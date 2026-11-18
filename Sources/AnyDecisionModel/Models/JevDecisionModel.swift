@@ -33,10 +33,7 @@ import Foundation
 )
 public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     /// The default API base URL.
-    public static let defaultBaseURL = URL(string: "https://api.typesafe.ai")!
-
-    /// The environment variables that supply the API key, in order of preference.
-    private static let apiKeyEnvironmentVariables = ["TYPESAFE_AI_API_KEY", "TYPESAFE_API_KEY"]
+    public static let defaultBaseURL = SystemOneDecisionModel.jevDefaultBaseURL
 
     /// The API base URL.
     public let baseURL: URL
@@ -83,12 +80,7 @@ public struct JevDecisionModel: DecisionModel, CustomStringConvertible {
     public static func environmentAPIKey(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String? {
-        for name in apiKeyEnvironmentVariables {
-            if let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-                return value
-            }
-        }
-        return nil
+        SystemOneDecisionModel.jevEnvironmentAPIKey(from: environment)
     }
 
     public var capabilities: DecisionCapabilities {
