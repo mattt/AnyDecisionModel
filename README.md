@@ -585,9 +585,10 @@ and a model that another package still has on the GPU can still cause the assert
 
 ### Jev
 
-`JevDecisionModel` sends each batch to `POST /v1/systemone`.
+`SystemOneDecisionModel.jev(…)` returns a model
+that sends each batch to `POST /v1/systemone`.
 The API key comes from `TYPESAFE_AI_API_KEY`
-(or `TYPESAFE_API_KEY`), or you can pass it to the initializer.
+(or `TYPESAFE_API_KEY`), or you can pass it as `apiKey:`.
 The model retries HTTP 429, 503, and 529 with exponential backoff
 and honors `Retry-After`;
 pass `retryPolicy: .never` to disable retries.
@@ -601,7 +602,7 @@ or [Ollaya](https://github.com/ollaya-dev/ollaya).
 Pass the server's URL, a placeholder API key, and its model name:
 
 ```swift
-let model = JevDecisionModel(
+let model = SystemOneDecisionModel.jev(
     baseURL: URL(string: "http://127.0.0.1:11435")!,
     apiKey: "local",
     modelID: "laya"
@@ -609,16 +610,17 @@ let model = JevDecisionModel(
 ```
 
 The API key must not be empty, even when the server ignores it.
-[`SystemOneDecisionModel`](#system-one) needs no placeholder key.
+The [`SystemOneDecisionModel` initializer](#system-one) needs no placeholder key.
 
 ### Ollama
 
-`OllamaDecisionModel` sends each batch to `POST /v1/systemone` on an Ollama server.
+`SystemOneDecisionModel.ollama(…)` returns a model
+that sends each batch to `POST /v1/systemone` on an Ollama server.
 Pass the name of a decision model, such as
 [Nimble](https://ollama.com/library/nimble):
 
 ```swift
-let model = OllamaDecisionModel(modelID: "nimble")
+let model = SystemOneDecisionModel.ollama(modelID: "nimble")
 let session = DecisionSession(model: model, state: .text(ticket))
 let urgent = try await session.probability(of: "Does this convey urgency?")
 ```
@@ -678,17 +680,27 @@ and the request throws a `DecisionError` with the kind `unsupportedOption`
 before it is sent if one is set.
 Every `SystemOneDecisionModel` reads the same request options,
 so put a field that belongs to one server, such as provider routing, on the model.
-`JevDecisionModel` and `OllamaDecisionModel` have no custom options
-and ignore the options for `SystemOneDecisionModel`.
 The model retries like the Jev model; pass `retryPolicy: .never` to disable retries.
 
+#### Migrating from `JevDecisionModel` and `OllamaDecisionModel`
+
+Version 0.11 deprecates `JevDecisionModel` and `OllamaDecisionModel`,
+and version 1.0 removes them.
 `SystemOneDecisionModel.jev(…)` and `SystemOneDecisionModel.ollama(…)`
-return models with the same configuration as `JevDecisionModel` and `OllamaDecisionModel`:
+take the same arguments and send the same requests:
 
 ```swift
-let jev = SystemOneDecisionModel.jev()
+// Before
+let jev = JevDecisionModel(modelID: "jev-latest")
+let ollama = OllamaDecisionModel(modelID: "nimble", keepAlive: 300)
+
+// After
+let jev = SystemOneDecisionModel.jev(modelID: "jev-latest")
 let ollama = SystemOneDecisionModel.ollama(modelID: "nimble", keepAlive: 300)
 ```
+
+The returned models read request options for `SystemOneDecisionModel`,
+which the deprecated types ignore.
 
 #### Images
 
@@ -744,8 +756,7 @@ go to the server unchecked.
 The model does not send TypeSafe's `assets` form of images,
 audio or video, or images in question instructions,
 and it does not ask `box` questions.
-`JevDecisionModel`, `OllamaDecisionModel`,
-`SystemOneDecisionModel.jev(…)`, and `SystemOneDecisionModel.ollama(…)` send no image attachments.
+`SystemOneDecisionModel.jev(…)` and `SystemOneDecisionModel.ollama(…)` send no image attachments.
 
 ### Gemini
 
