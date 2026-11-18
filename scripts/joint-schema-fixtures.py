@@ -162,9 +162,9 @@ ENCODING_CASES = [
         "question": {"type": "binary", "instructions": "Is the total above 1000 USD?"},
     },
     {
-        "name": "empty text and one option",
+        "name": "empty text and two options",
         "state": {"text": ""},
-        "question": {"type": "choice", "instructions": "Pick one.", "options": [{"name": "only"}]},
+        "question": {"type": "choice", "instructions": "Pick one.", "options": [{"name": "keep"}, {"name": "drop"}]},
     },
 ]
 
