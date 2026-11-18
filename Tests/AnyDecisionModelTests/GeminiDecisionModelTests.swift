@@ -259,8 +259,8 @@ struct GeminiDecisionModelTests {
                 """
         )
         let session = DecisionSession(model: makeModel(host), state: "state")
-        await #expect(
-            throws: DecisionError.inputBlocked(reason: "safety", message: "The input was blocked for safety.")
+        await expectDecisionError(
+            DecisionError.inputBlocked(reason: "safety", message: "The input was blocked for safety.")
         ) {
             _ = try await session.probability(of: "Question?")
         }
@@ -270,7 +270,7 @@ struct GeminiDecisionModelTests {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"prompt_feedback": {"block_reason": "blocklist"}}"#)
         let session = DecisionSession(model: makeModel(host), state: "state")
-        await #expect(throws: DecisionError.inputBlocked(reason: "blocklist", message: nil)) {
+        await expectDecisionError(DecisionError.inputBlocked(reason: "blocklist", message: nil)) {
             _ = try await session.probability(of: "Question?")
         }
     }
@@ -285,8 +285,8 @@ struct GeminiDecisionModelTests {
             statusCode: 400
         )
         let session = DecisionSession(model: makeModel(host), state: "state")
-        await #expect(
-            throws: DecisionError.inputBlocked(
+        await expectDecisionError(
+            DecisionError.inputBlocked(
                 reason: "safety",
                 message: "Request blocked due to safety violations (harmful content)."
             )
@@ -295,8 +295,31 @@ struct GeminiDecisionModelTests {
         }
     }
 
-    @Test(arguments: [400, 401, 429, 500])
-    func reportsHTTPErrors(statusCode: Int) async throws {
+    @Test func blockedInputWithHTTP400KeepsTheResponse() async throws {
+        let host = StubURLProtocol.Host()
+        host.enqueue(json: #"{"error": {"code": "safety", "message": "Blocked."}}"#, statusCode: 400)
+        let session = DecisionSession(model: makeModel(host), state: "state")
+
+        do {
+            _ = try await session.probability(of: "Question?")
+            Issue.record("Expected an error.")
+        } catch let error as DecisionError {
+            #expect(error.kind == .guardrailViolation)
+            #expect(error.reason == "safety")
+            #expect(error.response?.status.code == 400)
+            #expect(error.bodyText?.contains("Blocked.") == true)
+        }
+    }
+
+    @Test(
+        arguments: [
+            (400, DecisionError.Kind.httpError),
+            (401, .authenticationFailed),
+            (429, .rateLimited),
+            (500, .httpError),
+        ]
+    )
+    func reportsHTTPErrors(statusCode: Int, kind: DecisionError.Kind) async throws {
         let host = StubURLProtocol.Host()
         host.enqueue(
             json: #"{"error": {"code": \#(statusCode), "message": "Too many questions."}}"#,
@@ -308,11 +331,12 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch let DecisionError.requestFailed(code, detail, headers) {
-            #expect(code == statusCode)
-            #expect(detail.contains("Too many questions."))
-            #expect(!detail.contains("test-key"))
-            #expect(headers["x-request-id"] == "abc")
+        } catch let error as DecisionError {
+            #expect(error.kind == kind)
+            #expect(error.response?.status.code == statusCode)
+            #expect(error.bodyText?.contains("Too many questions.") == true)
+            #expect(!error.message.contains("test-key"))
+            #expect(error.header("x-request-id") == "abc")
         }
         #expect(host.recorded.count == 1)
     }
@@ -327,9 +351,10 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch let DecisionError.requestFailed(code, detail, _) {
-            #expect(code == 400)
-            #expect(detail.contains("invalid_argument"))
+        } catch let error as DecisionError {
+            #expect(error.kind == .httpError)
+            #expect(error.response?.status.code == 400)
+            #expect(error.bodyText?.contains("invalid_argument") == true)
         }
     }
 
@@ -346,8 +371,8 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Question?")
             Issue.record("Expected an error.")
-        } catch DecisionError.invalidResponse(let detail) {
-            #expect(!detail.hasPrefix("No answer"))
+        } catch let error as DecisionError where error.kind == .decodingError {
+            #expect(!error.message.hasPrefix("Invalid response: No answer"))
         }
     }
 
@@ -355,7 +380,9 @@ struct GeminiDecisionModelTests {
         let host = StubURLProtocol.Host()
         host.enqueue(json: #"{"answers": {"other": {"type": "noul", "noul": 0.5, "confidence": 0.5}}}"#)
         let session = DecisionSession(model: makeModel(host), state: "state")
-        await #expect(throws: DecisionError.invalidResponse("No answer for the question at index 0.")) {
+        await expectDecisionError(
+            DecisionError.invalidResponse("No answer for the question at index 0.", questionIndex: 0)
+        ) {
             _ = try await session.probability(of: "Question?")
         }
     }
@@ -363,7 +390,7 @@ struct GeminiDecisionModelTests {
     @Test func missingCredentialsFailBeforeRequest() async throws {
         let host = StubURLProtocol.Host()
         let session = DecisionSession(model: makeModel(host, apiKey: nil), state: "state")
-        await #expect(throws: DecisionError.missingCredentials) {
+        await expectDecisionError(DecisionError.missingCredentials) {
             _ = try await session.probability(of: "Question?")
         }
         #expect(host.recorded.isEmpty)
@@ -378,8 +405,8 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.decide(questions)
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedQuestion(let index, _) {
-            #expect(index == 1000)
+        } catch let error as DecisionError where error.kind == .unsupportedQuestion {
+            #expect(error.questionIndex == 1000)
         }
         #expect(host.recorded.isEmpty)
     }
@@ -391,8 +418,8 @@ struct GeminiDecisionModelTests {
         try model.capabilities.validate(Array(repeating: question, count: 1000), about: "state")
 
         let session = DecisionSession(model: model, state: "state")
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1000,
                 reason: "GeminiDecisionModel accepts at most 1000 questions in one request, not 1001."
             )
@@ -406,8 +433,8 @@ struct GeminiDecisionModelTests {
         let host = StubURLProtocol.Host()
         let executor = makeModel(host).makeExecutor()
         let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1000,
                 reason: "Gemini accepts at most 1000 questions in one request, not 1001."
             )
@@ -421,7 +448,7 @@ struct GeminiDecisionModelTests {
         let host = StubURLProtocol.Host()
         let executor = makeModel(host).makeExecutor()
         let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
-        await #expect(throws: DecisionError.unsupportedState("Gemini does not accept empty input.")) {
+        await expectDecisionError(DecisionError.unsupportedState("Gemini does not accept empty input.")) {
             _ = try await executor.decide(DecisionRequest(state: "  ", questions: questions))
         }
         #expect(host.recorded.isEmpty)
@@ -433,8 +460,8 @@ struct GeminiDecisionModelTests {
         let host = StubURLProtocol.Host()
         let session = DecisionSession(model: makeModel(host), state: "  ")
         let questions = Array(repeating: Question.binary(instructions: "x"), count: 1001)
-        await #expect(
-            throws: DecisionError.unsupportedQuestion(
+        await expectDecisionError(
+            DecisionError.unsupportedQuestion(
                 index: 1000,
                 reason: "GeminiDecisionModel accepts at most 1000 questions in one request, not 1001."
             )
@@ -450,8 +477,8 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.decide(.choice(instructions: "x", options: [ChoiceOption("only")]))
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedQuestion(let index, _) {
-            #expect(index == 0)
+        } catch let error as DecisionError where error.kind == .unsupportedQuestion {
+            #expect(error.questionIndex == 0)
         }
         #expect(host.recorded.isEmpty)
     }
@@ -577,7 +604,7 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Urgent?")
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedState {
+        } catch let error as DecisionError where error.kind == .unsupportedState {
         }
         #expect(host.recorded.isEmpty)
     }
@@ -603,7 +630,7 @@ struct GeminiDecisionModelTests {
         do {
             _ = try await session.probability(of: "Urgent?")
             Issue.record("Expected an error.")
-        } catch DecisionError.unsupportedState {
+        } catch let error as DecisionError where error.kind == .unsupportedState {
         }
         #expect(host.recorded.isEmpty)
     }

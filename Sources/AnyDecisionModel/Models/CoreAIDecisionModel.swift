@@ -236,13 +236,21 @@ import Foundation
         /// - Parameters:
         ///   - logits: The logits for every token in the vocabulary.
         ///   - tokenMap: The token IDs for each answer label.
+        ///   - index: The position of the question in its batch, if the logits are for one question.
         /// - Returns: The log-probabilities grouped by label, in label order.
-        /// - Throws: ``DecisionError/invalidResponse(_:)`` if a token ID is outside the logits.
-        static func tokenLogProbabilities(_ logits: [Float], tokenMap: [[Int]]) throws -> [[Double]] {
+        /// - Throws: ``DecisionError/invalidResponse(_:)`` if a token ID is outside the logits,
+        ///   with `index` as its ``DecisionError/questionIndex``.
+        static func tokenLogProbabilities(
+            _ logits: [Float],
+            tokenMap: [[Int]],
+            index: Int? = nil
+        ) throws -> [[Double]] {
             guard tokenMap.joined().allSatisfy({ logits.indices.contains($0) }) else {
-                throw DecisionError.invalidResponse(
-                    "The engine returned \(logits.count) logits, fewer than the answer token IDs need."
-                )
+                let detail = "The engine returned \(logits.count) logits, fewer than the answer token IDs need."
+                if let index {
+                    throw DecisionError.invalidResponse(detail, questionIndex: index)
+                }
+                throw DecisionError.invalidResponse(detail)
             }
             let normalizer = logits.lazy.map(Double.init).logSumExp()
             return tokenMap.map { ids in ids.map { Double(logits[$0]) - normalizer } }
@@ -279,7 +287,11 @@ import Foundation
             }
             return DecisionError.modelUnavailable(reason)
         case CoreAIKit.DecisionError.noLogits:
-            return DecisionError.invalidResponse("The engine returned no logits.")
+            let detail = "The engine returned no logits."
+            if let index {
+                return DecisionError.invalidResponse(detail, questionIndex: index)
+            }
+            return DecisionError.invalidResponse(detail)
         case let error as LocalizedError:
             return DecisionError.modelUnavailable(error.errorDescription ?? String(describing: error))
         default:
@@ -425,7 +437,8 @@ import Foundation
                     let readStart = ContinuousClock.now
                     let tokenLogProbabilities = try CoreAIDecisionModel.tokenLogProbabilities(
                         logits.values,
-                        tokenMap: plan.tokenMap
+                        tokenMap: plan.tokenMap,
+                        index: index
                     )
                     let (logMasses, allowedMass) = TokenScoring.logMasses(tokenLogProbabilities)
                     let probabilities = (model.calibration ?? .identity).probabilities(

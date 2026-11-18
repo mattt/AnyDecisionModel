@@ -248,17 +248,53 @@ public struct DecisionCapabilities: Hashable, Sendable {
 
 extension DecisionCapabilities {
     /// How a model produces the probabilities in its answers.
-    #if hasAttribute(nonexhaustive)
-        @nonexhaustive
-    #endif
-    public enum ProbabilitySource: String, Hashable, Sendable, Codable {
+    ///
+    /// More sources can be added, so a `switch` over them needs a `default`.
+    /// A source encodes as its ``rawValue``, a string such as `"native"`.
+    public struct ProbabilitySource: RawRepresentable, Hashable, Sendable, Codable, CustomStringConvertible {
+        /// The name of the source, such as `native`.
+        public let rawValue: String
+
+        private init(_ rawValue: String) {
+            self.rawValue = rawValue
+        }
+
+        /// Creates the source with a name.
+        ///
+        /// A name that this version does not know creates a source with that name,
+        /// as decoding does,
+        /// so a source can always be created again from its ``rawValue``.
+        /// This initializer never returns `nil`.
+        /// It stays failable so that code written for the enum that version 0.10 declared still compiles;
+        /// that enum returned `nil` for an unknown name.
+        ///
+        /// - Parameter rawValue: The name of the source, such as `native`.
+        public init?(rawValue: String) {
+            self.init(rawValue)
+        }
+
         /// The model reads probabilities from its output distribution or from a decision head.
-        case native
+        public static let native = ProbabilitySource("native")
 
         /// The model was prompted to state a number.
-        case estimated
+        public static let estimated = ProbabilitySource("estimated")
 
         /// The provider does not say how it produces probabilities.
-        case unspecified
+        public static let unspecified = ProbabilitySource("unspecified")
+
+        public var description: String { rawValue }
+
+        /// Decodes a source from its name.
+        ///
+        /// A name that this version does not know decodes as a source with that name,
+        /// so a value from a later version can be read and written again.
+        public init(from decoder: any Decoder) throws {
+            self.init(try decoder.singleValueContainer().decode(String.self))
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 }

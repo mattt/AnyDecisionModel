@@ -17,6 +17,8 @@ final class StubURLProtocol: URLProtocol {
         var headers: [String: String] = [:]
         /// A delay before the response, in seconds.
         var delay: Double = 0
+        /// A URL error to fail with, in place of a response.
+        var failure: URLError.Code?
     }
 
     struct Recorded: Sendable {
@@ -45,6 +47,12 @@ final class StubURLProtocol: URLProtocol {
         /// Queues one response for the next request to this host.
         func enqueue(json: String, statusCode: Int = 200, headers: [String: String] = [:], delay: Double = 0) {
             let exchange = Exchange(statusCode: statusCode, body: Data(json.utf8), headers: headers, delay: delay)
+            StubURLProtocol.state.withLock { $0[name, default: HostState()].pending.append(exchange) }
+        }
+
+        /// Queues a URL error for the next request to this host.
+        func enqueue(failure: URLError.Code) {
+            let exchange = Exchange(body: Data(), failure: failure)
             StubURLProtocol.state.withLock { $0[name, default: HostState()].pending.append(exchange) }
         }
 
@@ -81,6 +89,11 @@ final class StubURLProtocol: URLProtocol {
 
         guard let exchange, let url = request.url else {
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
+            return
+        }
+
+        if let failure = exchange.failure {
+            client?.urlProtocol(self, didFailWithError: URLError(failure))
             return
         }
 

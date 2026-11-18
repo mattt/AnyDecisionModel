@@ -103,7 +103,9 @@ dependencies: [
 ]
 ```
 
-Without traits, the package has no third-party dependencies
+Without traits, the package depends only on Apple's
+[swift-http-types](https://github.com/apple/swift-http-types),
+which `DecisionError` uses for HTTP responses,
 and provides the core types and the Jev, Ollama, System One, and Gemini backends.
 Enable the `MLX`, `CoreAI`, or `Llama` trait for the local backends:
 
@@ -221,6 +223,99 @@ Set it with the `options[custom:]` subscript, keyed by the model type.
 Only an executor of that type reads it,
 and the subscript returns `nil` for a type that has no value.
 A model without custom options has `Never` as its `CustomOptions` type.
+
+### Errors
+
+A model or session throws a `DecisionError`
+when a question, state, or option is invalid, or when the model or its provider fails.
+The error follows AnyLanguageModel's `HTTPTransportError`:
+its `kind` names what went wrong,
+and `message` describes it.
+Other fields are set when they apply:
+`questionIndex` for an error about one question,
+`reason` for a provider's code such as `safety`,
+`response` and `body` when the provider answered with an error status,
+and `underlyingError` for the error that caused this one.
+More kinds can be added, so a `switch` over them needs a `default`.
+
+```swift
+do {
+    let urgent = try await session.probability(of: "Does this convey urgency?")
+} catch let error as DecisionError where error.kind == .rateLimited {
+    try await Task.sleep(for: error.retryAfter ?? .seconds(1))
+} catch let error as DecisionError {
+    print(error.kind, error.message)
+}
+```
+
+The remote backends map HTTP status codes in the same way:
+401 and 403 to `authenticationFailed`, 402 to `quotaExceeded`,
+408 and 504 to `timedOut`, 429 to `rateLimited`,
+and every other status to `httpError`.
+`response` is an `HTTPResponse` from swift-http-types.
+`retryAfter` reads the response's `Retry-After` header, in seconds or as an HTTP date.
+`isRetryable` is `true` for `rateLimited`, `timedOut`, and HTTP 503 and 529;
+a model that retries reads its `RetryPolicy` instead,
+whose `retryableStatusCodes` decide.
+A request that fails on the way, such as one the network drops,
+throws the URL session's own `URLError`,
+and so does a request that is cancelled while the URL session sends it.
+A model that is cancelled at any other point throws `CancellationError`.
+An error keeps some credentials out of its response and body.
+The values of the response headers
+`Authorization`, `Proxy-Authorization`, `X-Api-Key`, and `X-Goog-Api-Key` are replaced.
+For a response with an error status,
+the remote backends also replace each value that the request sent in one of those headers,
+and the token after a scheme such as `Bearer`,
+wherever it appears in the body and so in the message.
+Nothing else is redacted:
+other response headers,
+text from a successful response, such as a provider's reason for blocking the input,
+and the fields of an error that you create are kept as they are.
+
+#### Migrating from version 0.10
+
+Through version 0.10, `DecisionError` is an enum,
+and version 0.11 makes it a struct.
+Code that creates an error,
+such as `throw DecisionError.invalidQuestion(index: 0, reason: "Empty.")`,
+compiles unchanged, with the same message.
+Other code needs these changes:
+
+- `DecisionError` is not `Equatable` or `Hashable`,
+  because `underlyingError` can hold any error.
+  `#expect(throws: DecisionError.missingCredentials)` and `error == .missingCredentials`
+  become a comparison of `error.kind`, and of `error.message` if needed.
+- `catch DecisionError.requestFailed(let status, let detail, let headers)` becomes
+  `catch let error as DecisionError where error.response != nil`,
+  with `error.response?.status.code`, `error.body`, and `error.response?.headerFields`.
+  The kind of an HTTP error is one of
+  `authenticationFailed`, `quotaExceeded`, `timedOut`, `rateLimited`, and `httpError`.
+- `catch DecisionError.invalidResponse(let detail)`,
+  and the same pattern for the other cases, becomes
+  `catch let error as DecisionError where error.kind == .invalidResponse`,
+  with `error.message`.
+  A response body that can't be decoded now has the kind `decodingError`,
+  and `inputBlocked(reason:message:)` creates the kind `guardrailViolation`.
+- `case .unsupportedQuestion(let index, _)` becomes
+  a check of `error.kind` and `error.questionIndex`.
+- `switch error` over the cases becomes `switch error.kind`, with a `default` case.
+- `headers["retry-after"]` becomes `error.retryAfter`, a `Duration`.
+- A cancelled request to a remote model can throw `URLError` with the code `cancelled`,
+  where version 0.10 threw `CancellationError`.
+- `catch let error as EncodingError` for a request body that a remote model can't encode
+  becomes a check for the kind `invalidRequest`,
+  with the `EncodingError` in `error.underlyingError`.
+- `catch let error as SystemOneDecisionModel.ConfigurationError` for a request's options
+  becomes a check for the kind `unsupportedOption`.
+  The `SystemOneDecisionModel` initializer still throws `ConfigurationError`.
+- `DecisionKind` and `DecisionCapabilities.ProbabilitySource` are now structs
+  with static members, such as `.binary` and `.native`.
+  Those spellings, `rawValue`, and `init?(rawValue:)` still compile,
+  and both still encode as strings.
+  `init?(rawValue:)` now accepts a name that the package does not know,
+  as decoding does, where the enum returned `nil`.
+  A `switch` over either needs a `default` case in place of `@unknown default`.
 
 ## Backends
 
@@ -579,7 +674,8 @@ A request option overrides a default with the same top-level body key,
 or a header with the same name in any letter case.
 The other defaults stay.
 Request options have the same reserved keys,
-and the request throws `SystemOneDecisionModel.ConfigurationError` before it is sent if one is set.
+and the request throws a `DecisionError` with the kind `unsupportedOption`
+before it is sent if one is set.
 Every `SystemOneDecisionModel` reads the same request options,
 so put a field that belongs to one server, such as provider routing, on the model.
 `JevDecisionModel` and `OllamaDecisionModel` have no custom options
@@ -633,7 +729,7 @@ with one JPEG image, a yes-or-no question, and a choice question.
 Images have not been run against Liquid's API or Ollama.
 llama.cpp places every image before the state in the prompt,
 and returns HTTP status 501 if the model or its projector does not read images;
-the model throws `DecisionError.requestFailed` for that response.
+the model throws a `DecisionError` with the kind `httpError` for that response.
 
 A model with an image encoding declares `.image` in `capabilities.supportedAttachmentKinds`,
 and a model without one declares no attachment kinds,
@@ -670,7 +766,7 @@ A request can have at most 1,000 questions,
 a choice must have 2 to 255 options,
 and a score must have 2 to 255 non-empty levels.
 The model checks these limits and Gemini's rules for option names before it sends a request.
-If Gemini blocks the input, the model throws `DecisionError.inputBlocked`.
+If Gemini blocks the input, the model throws a `DecisionError` with the kind `guardrailViolation`.
 
 To ask about images, audio, video, or PDF documents,
 pass a state of text and attachment segments:

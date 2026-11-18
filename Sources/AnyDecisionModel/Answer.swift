@@ -75,7 +75,7 @@ extension Answer {
     func validate(for question: Question, index: Int) throws {
         let tolerance = Self.valueTolerance
         func fail(_ reason: String) -> DecisionError {
-            .invalidResponse("Question at index \(index): \(reason)")
+            .invalidResponse("Question at index \(index): \(reason)", questionIndex: index)
         }
         func checkProbability(_ value: Double, _ name: String) throws {
             guard value.isFinite, value >= -tolerance, value <= 1 + tolerance else {

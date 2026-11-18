@@ -2,6 +2,15 @@ import Dispatch
 import Foundation
 
 /// Retry behavior for eligible HTTP failures.
+///
+/// A model retries a ``DecisionError`` whose ``DecisionError/response``
+/// has a status code in ``retryableStatusCodes``.
+/// The status code decides,
+/// whatever the error's ``DecisionError/isRetryable`` value,
+/// and an error without a response is not retried.
+/// A `URLError`, such as a timeout in the URL session, is not retried either.
+/// The error's ``DecisionError/retryAfter`` value replaces the generated delay,
+/// and either delay is limited by ``maximumInterval``.
 public struct RetryPolicy: Hashable, Sendable, Sequence {
     /// A strategy that determines how long to wait between retries.
     public enum Strategy: Hashable, Sendable {
@@ -32,8 +41,9 @@ public struct RetryPolicy: Hashable, Sendable, Sequence {
 
     /// The longest delay between requests.
     ///
-    /// This limit also applies to `Retry-After` headers. A value of `nil`
-    /// disables this limit.
+    /// This limit also applies to ``DecisionError/retryAfter``,
+    /// which comes from a `Retry-After` header.
+    /// A value of `nil` disables this limit.
     public let maximumInterval: TimeInterval?
 
     /// The largest number of retries after the first attempt.
@@ -150,17 +160,32 @@ public struct RetryPolicy: Hashable, Sendable, Sequence {
         )
     }
 
-    func delay(
-        _ generatedDelay: TimeInterval,
-        retryAfter: String?,
-        now: Date = Date()
-    ) -> TimeInterval {
-        guard let retryAfter,
-            let retryAfterDelay = Self.parseRetryAfter(retryAfter, now: now)
-        else {
+    /// Returns whether the policy retries an error.
+    ///
+    /// The policy retries an error with an HTTP status code
+    /// in ``retryableStatusCodes``,
+    /// whatever its ``DecisionError/isRetryable`` value.
+    /// It does not retry an error without a status code,
+    /// such as a response that can't be decoded.
+    func shouldRetry(_ error: DecisionError) -> Bool {
+        guard let statusCode = error.response?.status.code else { return false }
+        return retryableStatusCodes.contains(statusCode)
+    }
+
+    /// Returns the delay before the next attempt, in seconds.
+    ///
+    /// A `Retry-After` delay replaces the generated delay.
+    /// Either delay is limited to zero through ``maximumInterval``.
+    ///
+    /// - Parameters:
+    ///   - generatedDelay: The delay from ``Retrier/next()``.
+    ///   - retryAfter: The error's ``DecisionError/retryAfter`` value.
+    func delay(_ generatedDelay: TimeInterval, retryAfter: Duration?) -> TimeInterval {
+        guard let retryAfter else {
             return clamp(generatedDelay)
         }
-        return clamp(retryAfterDelay)
+        let (seconds, attoseconds) = retryAfter.components
+        return clamp(Double(seconds) + Double(attoseconds) * 1e-18)
     }
 
     private func clamp(_ delay: TimeInterval) -> TimeInterval {
@@ -169,21 +194,6 @@ public struct RetryPolicy: Hashable, Sendable, Sequence {
             Swift.max(delay, 0),
             maximumInterval ?? .greatestFiniteMagnitude
         )
-    }
-
-    static func parseRetryAfter(_ value: String, now: Date) -> Double? {
-        let trimmed = value.trimmingCharacters(in: .whitespaces)
-        if let seconds = Double(trimmed), seconds.isFinite {
-            return seconds
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "GMT")
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        if let date = formatter.date(from: trimmed) {
-            return date.timeIntervalSince(now)
-        }
-        return nil
     }
 }
 

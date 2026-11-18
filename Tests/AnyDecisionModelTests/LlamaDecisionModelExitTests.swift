@@ -117,11 +117,11 @@ import Testing
                     do {
                         _ = try await session.probability(of: "Is this about a payment?")
                         exit(6)
-                    } catch DecisionError.modelUnavailable {}
+                    } catch let error as DecisionError where error.kind == .modelUnavailable {}
                     do {
                         try await DecisionSession(model: model, state: "ticket").prewarm()
                         exit(7)
-                    } catch DecisionError.modelUnavailable {}
+                    } catch let error as DecisionError where error.kind == .modelUnavailable {}
                     model.removeFromCache()
                     _ = session
                 }
@@ -145,7 +145,7 @@ import Testing
                 do {
                     _ = try await DecisionSession(model: other, state: "ticket").probability(of: "Is this urgent?")
                     exit(5)
-                } catch DecisionError.modelUnavailable {}
+                } catch let error as DecisionError where error.kind == .modelUnavailable {}
                 exit(0)
             }
             await ExitTestTimer.finish(name, watchdog, measuring: false)
@@ -659,7 +659,7 @@ import Testing
                     exit(5)
                 } catch let error as DecisionError {
                     // A distinct status shows that the file check ran first.
-                    guard error == LlamaLifecycle.exiting else { exit(6) }
+                    guard isDecisionError(error, like: LlamaLifecycle.exiting) else { exit(6) }
                 }
                 exit(0)
             }

@@ -94,8 +94,12 @@ import Testing
 
         @available(macOS 27, iOS 27, *)
         @Test func tokenLogProbabilitiesRejectTokensOutsideTheLogits() {
-            #expect(throws: AnyDecisionModel.DecisionError.self) {
+            let detail = "The engine returned 2 logits, fewer than the answer token IDs need."
+            expectDecisionError(.invalidResponse(detail)) {
                 try CoreAIDecisionModel.tokenLogProbabilities([0, 1], tokenMap: [[0], [2]])
+            }
+            expectDecisionError(.invalidResponse(detail, questionIndex: 3)) {
+                try CoreAIDecisionModel.tokenLogProbabilities([0, 1], tokenMap: [[0], [2]], index: 3)
             }
         }
 
@@ -103,24 +107,36 @@ import Testing
         @Test func kitErrorsMapToDecisionErrors() {
             let tooLong = CoreAIKit.DecisionError.promptTooLong(tokens: 9000, max: 8191)
             #expect(
-                decisionError(for: tooLong, index: 2) as? AnyDecisionModel.DecisionError
-                    == .unsupportedQuestion(
+                isDecisionError(
+                    decisionError(for: tooLong, index: 2),
+                    like: .unsupportedQuestion(
                         index: 2,
                         reason: "The prompt is 9000 tokens, and the model takes at most 8191."
                     )
+                )
             )
             #expect(
-                decisionError(for: CoreAIKit.DecisionError.noLogits, index: 0) as? AnyDecisionModel.DecisionError
-                    == .invalidResponse("The engine returned no logits.")
+                isDecisionError(
+                    decisionError(for: CoreAIKit.DecisionError.noLogits, index: 2),
+                    like: .invalidResponse("The engine returned no logits.", questionIndex: 2)
+                )
+            )
+            #expect(
+                isDecisionError(
+                    decisionError(for: CoreAIKit.DecisionError.noLogits),
+                    like: .invalidResponse("The engine returned no logits.")
+                )
             )
             let unsupported = CoreAIKit.DecisionError.unsupportedModel(id: "gemma", reason: "no logits")
             #expect(
-                decisionError(for: unsupported) as? AnyDecisionModel.DecisionError
-                    == .modelUnavailable("'gemma' cannot be used for typed decisions: no logits")
+                isDecisionError(
+                    decisionError(for: unsupported),
+                    like: .modelUnavailable("'gemma' cannot be used for typed decisions: no logits")
+                )
             )
             #expect(decisionError(for: CancellationError()) is CancellationError)
             let own = AnyDecisionModel.DecisionError.invalidQuestion(index: 1, reason: "Empty.")
-            #expect(decisionError(for: own, index: 0) as? AnyDecisionModel.DecisionError == own)
+            #expect(isDecisionError(decisionError(for: own, index: 0), like: own))
         }
 
         @available(macOS 27, iOS 27, *)
@@ -132,8 +148,7 @@ import Testing
             await #expect {
                 _ = try await session.decide(.binary(instructions: "Is this a test?"))
             } throws: { error in
-                guard case .modelUnavailable = error as? AnyDecisionModel.DecisionError else { return false }
-                return true
+                (error as? AnyDecisionModel.DecisionError)?.kind == .modelUnavailable
             }
             #expect(model.isLoaded == false)
         }
@@ -148,15 +163,13 @@ import Testing
             await #expect {
                 _ = try await session.decide(.choice(instructions: "Pick one.", options: options))
             } throws: { error in
-                guard case .unsupportedQuestion = error as? AnyDecisionModel.DecisionError else { return false }
-                return true
+                (error as? AnyDecisionModel.DecisionError)?.kind == .unsupportedQuestion
             }
             let levels = (0 ..< 11).map { "level \($0)" }
             await #expect {
                 _ = try await session.decide(.score(instructions: "Rate.", levels: levels))
             } throws: { error in
-                guard case .unsupportedQuestion = error as? AnyDecisionModel.DecisionError else { return false }
-                return true
+                (error as? AnyDecisionModel.DecisionError)?.kind == .unsupportedQuestion
             }
         }
     }
@@ -454,10 +467,10 @@ import Testing
             await #expect {
                 _ = try await session.decide([questions[0], questions[1]])
             } throws: { error in
-                guard case .unsupportedQuestion(let index, _) = error as? AnyDecisionModel.DecisionError else {
+                guard let error = error as? AnyDecisionModel.DecisionError, error.kind == .unsupportedQuestion else {
                     return false
                 }
-                return index == 0
+                return error.questionIndex == 0
             }
         }
 

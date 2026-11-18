@@ -137,7 +137,7 @@ import Testing
             await #expect {
                 _ = try await session.probability(of: "Is it a cat?")
             } throws: { error in
-                guard case .unsupportedState = error as? DecisionError else { return false }
+                guard let error = error as? DecisionError, error.kind == .unsupportedState else { return false }
                 return true
             }
             #expect(!model.isLoaded)

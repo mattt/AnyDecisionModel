@@ -75,18 +75,54 @@ public enum Question: Hashable, Sendable {
 }
 
 /// The kind of a decision question.
-#if hasAttribute(nonexhaustive)
-    @nonexhaustive
-#endif
-public enum DecisionKind: String, Hashable, Sendable, Codable {
+///
+/// More kinds can be added, so a `switch` over them needs a `default`.
+/// A kind encodes as its ``rawValue``, a string such as `"binary"`.
+public struct DecisionKind: RawRepresentable, Hashable, Sendable, Codable, CustomStringConvertible {
+    /// The name of the kind, such as `binary`.
+    public let rawValue: String
+
+    private init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    /// Creates the kind with a name.
+    ///
+    /// A name that this version does not know creates a kind with that name,
+    /// as decoding does,
+    /// so a kind can always be created again from its ``rawValue``.
+    /// This initializer never returns `nil`.
+    /// It stays failable so that code written for the enum that version 0.10 declared still compiles;
+    /// that enum returned `nil` for an unknown name.
+    ///
+    /// - Parameter rawValue: The name of the kind, such as `binary`.
+    public init?(rawValue: String) {
+        self.init(rawValue)
+    }
+
     /// A yes-or-no question. See ``Question/binary(instructions:criteria:)``.
-    case binary
+    public static let binary = DecisionKind("binary")
 
     /// A question that selects one option from a set. See ``Question/choice(instructions:options:)``.
-    case choice
+    public static let choice = DecisionKind("choice")
 
     /// A question that places the state on an ordinal scale. See ``Question/score(instructions:levels:)``.
-    case score
+    public static let score = DecisionKind("score")
+
+    public var description: String { rawValue }
+
+    /// Decodes a kind from its name.
+    ///
+    /// A name that this version does not know decodes as a kind with that name,
+    /// so a value from a later version can be read and written again.
+    public init(from decoder: any Decoder) throws {
+        self.init(try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// Descriptions of what makes a binary question true or false.
