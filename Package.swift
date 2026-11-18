@@ -24,7 +24,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMinor(from: "3.32.3")),
         .package(url: "https://github.com/huggingface/swift-huggingface", "0.9.0" ..< "2.0.0"),
-        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.0.0"),
+        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.4.0"),
         .package(url: "https://github.com/john-rocky/coreai-kit", from: "0.7.3"),
         .package(url: "https://github.com/mattt/llama.swift", .upToNextMajor(from: "3.0.0")),
     ],
