@@ -89,6 +89,9 @@ import Foundation
         /// A local directory with the model files, or `nil` to download the model.
         public let directory: URL?
 
+        private let downloadHub: HubClient?
+        let cacheKey: String
+
         /// The calibration applied to answer probabilities, or `nil` for raw probabilities.
         public var calibration: Calibration?
 
@@ -230,6 +233,14 @@ import Foundation
             self.modelID = modelID
             self.hub = hub
             self.directory = directory
+            if let directory {
+                self.downloadHub = nil
+                self.cacheKey = directory.standardizedFileURL.path
+            } else {
+                let client = hub ?? HubClient()
+                self.downloadHub = client
+                self.cacheKey = "\(client.host.absoluteString):\(modelID)"
+            }
             self.calibration = calibration
             self.rotationDebiasing = rotationDebiasing
             self.prefixCaching = prefixCaching
@@ -268,10 +279,6 @@ import Foundation
             containerCache.removeAll()
         }
 
-        var cacheKey: String {
-            directory?.standardizedFileURL.path ?? modelID
-        }
-
         /// Returns the format that applies to a loaded model.
         ///
         /// - Parameter declaresD1LFM2: Whether the model's `config.json` declares a d1 model.
@@ -287,20 +294,20 @@ import Foundation
         /// Only the language model runs; the vision tower stays loaded but unused.
         /// Every other model loads through `MLXLLM`.
         /// The loader depends only on `config.json`, not on ``promptFormat``,
-        /// because models with the same path or identifier share one loaded container.
+        /// because models with the same directory or the same hub endpoint and model ID share a container.
         /// The model chooses the factory itself instead of calling `loadModelContainer`,
         /// which tries `MLXVLM` before `MLXLLM`
         /// and would load model types that both register, such as `gemma3`, as vision models.
         func loadModel() async throws -> LoadedModel {
             let modelID = modelID
-            let hub = hub
+            let hub = downloadHub
             let directory = directory
             do {
                 return try await containerCache.value(for: cacheKey) {
                     // mlx-swift-lm 3 takes explicit downloader and tokenizer loaders.
                     // The macros back them with HubClient and AutoTokenizer.
                     let tokenizerLoader = #huggingFaceTokenizerLoader()
-                    let downloader = directory == nil ? (hub.map { #hubDownloader($0) } ?? #hubDownloader()) : nil
+                    let downloader = hub.map { #hubDownloader($0) }
 
                     let configuration: Data
                     if let directory {
