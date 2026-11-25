@@ -4,6 +4,8 @@ import Testing
 @testable import AnyDecisionModel
 
 #if MLX
+    import HuggingFace
+
     // MLX integration tests download and run a real model.
     // Set `ENABLE_MLX_TESTS=1` to run them.
     // Set `MLX_MODEL_ID` to use another model,
@@ -13,6 +15,43 @@ import Testing
 
     @Suite("MLXDecisionModel configuration")
     struct MLXDecisionModelConfigurationTests {
+        @Test func remoteCacheUsesEndpointAndModelID() async throws {
+            let endpoint = URL(string: "https://hub.example/first")!
+            let first = HubClient(host: endpoint, cache: nil)
+            let second = HubClient(host: URL(string: "https://hub.example/second")!, cache: nil)
+            let sameEndpoint = HubClient(host: endpoint, cache: nil)
+            let cache = ModelCache<Int>()
+
+            func value(_ modelID: String, hub: HubClient, loading value: Int) async throws -> Int {
+                let model = MLXDecisionModel(modelID: modelID, hub: hub)
+                return try await cache.value(for: model.cacheKey) { value }
+            }
+
+            #expect(try await value("example/model", hub: first, loading: 1) == 1)
+            #expect(try await value("example/model", hub: second, loading: 2) == 2)
+            #expect(try await value("example/model", hub: sameEndpoint, loading: 3) == 1)
+            #expect(try await value("example/other", hub: first, loading: 4) == 4)
+        }
+
+        @Test func implicitAndExplicitHubShareTheResolvedEndpoint() {
+            let implicit = MLXDecisionModel(modelID: "example/model")
+            let explicit = MLXDecisionModel(modelID: "example/model", hub: HubClient(host: HubClient().host))
+            #expect(implicit.cacheKey == explicit.cacheKey)
+        }
+
+        @Test func localCacheUsesOnlyTheStandardizedDirectory() {
+            let directory = URL(fileURLWithPath: "/tmp/models/example")
+            let hub = HubClient(host: URL(string: "https://hub.example")!, cache: nil)
+            let first = MLXDecisionModel(modelID: "example/model", directory: directory)
+            let second = MLXDecisionModel(
+                modelID: "example/other",
+                hub: hub,
+                directory: directory.appendingPathComponent("../example")
+            )
+            #expect(first.cacheKey == second.cacheKey)
+            #expect(first.cacheKey != MLXDecisionModel(modelID: "example/model", hub: hub).cacheKey)
+        }
+
         @Test func capabilitiesHaveTokenLabelLimits() {
             let capabilities = MLXDecisionModel(modelID: defaultModelID).capabilities
             #expect(capabilities.maximumChoiceOptions == 26)
